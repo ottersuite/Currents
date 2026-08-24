@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <queries>
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
+    </queries>
+
+    <application
+        android:name="app.otter.client.OtterApplication"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Otter">
+
+        <profileable android:shell="true" tools:targetApi="29" />
+
+        <activity
+            android:name="app.otter.client.MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask" />
+
+        <!-- Keep the shipped launcher component so existing home-screen shortcuts survive the rebrand. -->
+        <activity-alias
+            android:name="app.orca.client.MainActivity"
+            android:exported="true"
+            android:targetActivity="app.otter.client.MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Opt-in in-app sign-in surface. Never exported: it is only started by Otter itself. -->
+        <activity
+            android:name="app.otter.client.RedditAuthWebViewActivity"
+            android:exported="false"
+            android:label="@string/reddit_sign_in_title"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:windowSoftInputMode="adjustResize" />
+    </application>
+
+</manifest>

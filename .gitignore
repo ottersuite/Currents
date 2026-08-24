@@ -1,0 +1,18 @@
+*.iml
+.gradle/
+.gradle-user-home/
+.android-user-home/
+.kotlin/
+.idea/
+local.properties
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+app/build/
+*.apk
+*.aab
+
+# Development artifacts: icon design iterations and verification screenshots, ~26MB of PNGs.
+# They stay on disk; git just never forgets a binary, and none of them are build inputs.
+artifacts/

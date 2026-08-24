@@ -1,0 +1,18 @@
+# Normalize line endings to LF in the repository and in the working copy.
+#
+# This project is developed on Windows, where git's autocrlf would otherwise check `gradlew` out
+# with CRLF endings — which makes it unrunnable as a shell script on macOS, Linux and CI — and
+# would rewrite every source file's endings on the next machine that clones it.
+* text=auto eol=lf
+
+# Windows-only scripts genuinely want CRLF.
+*.bat text eol=crlf
+
+# Never transform binaries.
+*.png binary
+*.jpg binary
+*.webp binary
+*.zip binary
+*.jar binary
+*.apk binary
+*.aab binary

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Themed-icon layer. Android tints this by alpha alone, so the artwork here is the otter's
+    silhouette on a transparent square, derived from the same source drawing as the foreground
+    and positioned identically inside the adaptive icon's safe zone.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <bitmap
+            android:antialias="true"
+            android:filter="true"
+            android:gravity="fill"
+            android:src="@drawable/ic_launcher_monochrome_raster" />
+    </item>
+</layer-list>
