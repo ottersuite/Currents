@@ -13,6 +13,7 @@
   <a href="https://github.com/ottersuite/Currents/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/ottersuite/Currents?style=for-the-badge&logo=github"></a>
   <a href="https://github.com/ottersuite/Currents/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/ottersuite/Currents/total?style=for-the-badge&logo=android"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/ottersuite/Currents?style=for-the-badge"></a>
+  <a href="https://discord.gg/7hmp2mt3v2"><img alt="Join the Currents Discord" src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
   <img alt="Android 8.0 or newer" src="https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white">
 </p>
 
@@ -22,6 +23,7 @@
   · <a href="SETUP.md">Setup</a>
   · <a href="FAQ.md">FAQ</a>
   · <a href="CHANGELOG.md">Changelog</a>
+  · <a href="https://discord.gg/7hmp2mt3v2">Discord</a>
   · <a href="https://github.com/ottersuite/Currents/issues">Issues</a>
 </p>
 
@@ -145,7 +147,7 @@ Release builds are minified and resource-shrunk with R8. The `benchmark` build i
 
 ## Contributing
 
-Bug reports, focused feature proposals, documentation improvements, and pull requests are welcome.
+Bug reports, focused feature proposals, documentation improvements, and pull requests are welcome. Join the [Currents Discord](https://discord.gg/7hmp2mt3v2) to talk with the community.
 
 1. [Open an issue](https://github.com/ottersuite/Currents/issues/new) describing the bug or proposed change.
 2. Fork the repository and create a focused branch from `main`.
@@ -168,4 +170,5 @@ Currents is distributed under the [MIT License](LICENSE).
 
 - Repository: [github.com/ottersuite/Currents](https://github.com/ottersuite/Currents)
 - Releases: [github.com/ottersuite/Currents/releases](https://github.com/ottersuite/Currents/releases)
+- Community: [Currents Discord](https://discord.gg/7hmp2mt3v2)
 - Bug reports and feature requests: [GitHub Issues](https://github.com/ottersuite/Currents/issues)
