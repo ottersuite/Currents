@@ -145,17 +145,6 @@ Release builds are minified and resource-shrunk with R8. The `benchmark` build i
 
 </details>
 
-## Contributing
-
-Bug reports, focused feature proposals, documentation improvements, and pull requests are welcome. Join the [Currents Discord](https://discord.gg/7hmp2mt3v2) to talk with the community.
-
-1. [Open an issue](https://github.com/ottersuite/Currents/issues/new) describing the bug or proposed change.
-2. Fork the repository and create a focused branch from `main`.
-3. Keep the project credential-free and preserve the blank first-run Client ID state.
-4. Add or update tests for behavior changes.
-5. Run the verification commands above.
-6. Open a pull request against `main`.
-
 ## Privacy and independence
 
 Currents talks directly to Reddit and to media hosts needed for content you choose to view. It has no bundled client ID and no service that lends credentials to users. OAuth refresh tokens are encrypted locally with Android Keystore; clearing the API configuration or disconnecting removes local account credentials.
