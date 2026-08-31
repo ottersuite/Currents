@@ -1,8 +1,27 @@
-# Otter
+# Currents
 
-Otter is an original Android client prototype built around the qualities that make dense, gesture-first iOS Reddit clients pleasant to use: an edge-to-edge feed, fast swipe actions, a compact action dock, a community drawer, colorful nested-comment rails, and deep appearance controls.
+<p align="center">
+  <img src="app/src/main/res/drawable-nodpi/ic_launcher_artwork.png" width="160" alt="Currents app icon">
+</p>
 
-It deliberately uses its own name, icon, palette, copy, and Android-native implementation. It does not include Narwhal artwork, source code, proprietary fonts, or Reddit/Snoo artwork.
+Currents is an open-source, gesture-first Reddit client for Android. I came to Android from iOS and missed having a polished, information-dense app that felt quick, intentional, and comfortable in one hand. Currents is the app I wanted to use: edge-to-edge content, fast swipe actions, a compact action dock, a community drawer, colorful comment rails, native media, and enough appearance controls to make the experience your own.
+
+This is an original Android-native project with its own name, icon, palette, and copy. It does not include another client's artwork, source code, proprietary fonts, or Reddit/Snoo artwork.
+
+## Download
+
+[**Download the latest APK**](https://github.com/ottersuite/Currents/releases/latest/download/Currents.apk)
+
+Currents requires Android 8.0 (API 26) or newer. Because the APK is distributed through GitHub rather than an app store, Android may ask you to allow installs from the browser or file manager you use to open it.
+
+> [!IMPORTANT]
+> Currents does **not** ship with a Reddit client ID, and I do not provide one. The Client ID field is intentionally blank. To connect a Reddit account, every user must register or obtain approval for their own Reddit installed-app credentials and enter their own Client ID, User-Agent, and redirect URI in Settings. Your use of Reddit's API is subject to Reddit's current terms and approval requirements.
+
+## Why Currents exists
+
+After moving from iOS, I missed the small details that make a social reader feel genuinely polished: predictable gestures, dense layouts that still breathe, media that opens where you expect, comments that are easy to follow, and settings that respect how differently people use their phones. Currents brings that sensibility to Android without pretending to be an iOS app. It uses Jetpack Compose, Android's native navigation and media stack, Material theming, secure OAuth callbacks, and responsive phone/tablet layouts.
+
+The project is open source under the [MIT License](LICENSE). Bug reports, thoughtful fixes, and improvements are welcome.
 
 ## What is implemented
 
@@ -14,7 +33,7 @@ It deliberately uses its own name, icon, palette, copy, and Android-native imple
 - Full-screen viewer with pinch zoom, double-tap zoom, and swipe-down to dismiss
 - Sortable feed and comment views
 - Post detail with inline media, nested comments, collapse state, and next-thread jump
-- Account-backed voting, saving, Reddit hide/unhide, reporting, subscriptions, post creation, and threaded replies
+- Account-backed voting, saving, Reddit hide/unhide, reporting, subscriptions, text and link post creation, and threaded replies
 - Edit/delete controls for the connected account's posts and comments; user blocking where Reddit permits the client ID
 - Pull down to reload the feed or a post's comments
 - Back at the feed level retraces the communities visited, restoring posts and scroll position
@@ -32,7 +51,7 @@ It deliberately uses its own name, icon, palette, copy, and Android-native imple
 - Encrypted local refresh-token storage backed by Android Keystore
 - Explicit NSFW/spoiler media gates before any remote preview is requested
 
-## Run it
+## Build it
 
 Requirements:
 
@@ -51,12 +70,12 @@ The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Reddit account setup
 
-Otter starts with a blank feed. Connecting Reddit requires a registered OAuth app and compliance with Reddit's current Developer and Data API terms, even when this is a personal, sideloaded client.
+Currents starts with a blank feed. Connecting Reddit requires a registered OAuth app and compliance with Reddit's current Developer and Data API terms, even when this is a personal, sideloaded client.
 
 To connect your account:
 
 1. Obtain any access or approval Reddit currently requires, then open [Reddit's app preferences](https://www.reddit.com/prefs/apps) while signed in.
-2. Create an app, choose the **installed app** type, and register a redirect URI. You can use Otter's default:
+2. Create an app, choose the **installed app** type, and register a redirect URI. You can use Currents' default:
 
    ```text
    app.orca.client://oauth/reddit
@@ -65,34 +84,27 @@ To connect your account:
    You can instead choose another lowercase hierarchical custom scheme, such as `my.personal.client://oauth/return` or `my.personal.client:/oauth/return`. A verified `https://` callback with an explicit path is also supported when its domain has the required Digital Asset Links association. Plain HTTP is not supported.
 
 3. Copy the public client ID shown beneath the app name. An installed app must not embed or use a client secret.
-4. In Otter, open **Settings → Reddit connection → Reddit API configuration** and enter:
+4. In Currents, open **Settings → Reddit connection → Reddit API configuration** and enter:
 
    - **Client ID** — the public installed-app ID
    - **User-Agent** — a unique description of the platform, app/version, and your Reddit username
    - **Redirect URI** — the exact callback registered in step 2
 
-5. Save the configuration, then tap **Connect Reddit account**. Otter applies the new values immediately; no rebuild is needed.
+5. Save the configuration, then tap **Connect Reddit account**. Currents applies the new values immediately; no rebuild is needed.
 
-Otter keeps the established `app.orca.client` application ID and default callback so an installed Orca build upgrades in place without losing settings, read history, or encrypted Reddit credentials. Existing Reddit app registrations therefore do not need to change. The saved redirect remains user-configurable: Otter passes its scheme to Android's Auth Tab at runtime, and the returned callback base and one-time OAuth state are both checked before an authorization code is accepted. An authority-only URI may serialize with or without its equivalent root `/`. Use an up-to-date default browser with Auth Tab support.
+Currents keeps the established `app.orca.client` application ID and default callback so earlier builds upgrade in place without losing settings, read history, or encrypted Reddit credentials. Existing Reddit app registrations therefore do not need to change. The saved redirect remains user-configurable: Currents passes its scheme to Android's Auth Tab at runtime, and the returned callback base and one-time OAuth state are both checked before an authorization code is accepted. An authority-only URI may serialize with or without its equivalent root `/`. Use an up-to-date default browser with Auth Tab support.
 
-### Signing in inside Otter
+### Signing in inside Currents
 
-**Settings → Reddit connection → Sign in inside Otter** replaces the Auth Tab with an in-app WebView that watches its own navigations for the configured redirect. It is off by default and exists for one case: a client ID whose registered redirect URI belongs to an OAuth app someone else registered. A browser can only hand a callback to the app that owns the scheme, so that case never returns through an Auth Tab, while a WebView recognizes the redirect as a string and never involves Android's intent router.
+**Settings → Reddit connection → Sign in inside Currents** replaces the Auth Tab with an in-app WebView that watches its own navigations for the configured redirect. It is off by default and exists for one case: a client ID whose registered redirect URI belongs to an OAuth app someone else registered. A browser can only hand a callback to the app that owns the scheme, so that case never returns through an Auth Tab, while a WebView recognizes the redirect as a string and never involves Android's intent router.
 
-The trade-off is real. The Auth Tab keeps Reddit's login page in the browser's process, where Otter cannot see it; the WebView runs that page inside Otter. Reuse of another developer's client ID is also against Reddit's Developer Terms, and the account carrying the risk is yours. Prefer using your own registration with Otter's stable default redirect URI, `app.orca.client://oauth/reddit` — Reddit still permits editing an existing app even where it no longer offers new client IDs.
+The trade-off is real. The Auth Tab keeps Reddit's login page in the browser's process, where Currents cannot see it; the WebView runs that page inside Currents. Reuse of another developer's client ID is also against Reddit's Developer Terms, and the account carrying the risk is yours. Prefer using your own registration with Currents' stable default redirect URI, `app.orca.client://oauth/reddit` — Reddit still permits editing an existing app even where it no longer offers new client IDs.
 
 Both paths converge on the same acceptance check: the callback base must match the configured redirect, the one-time OAuth state must match, and only then is the code exchanged. The in-app page keeps its Reddit cookies across an abandoned attempt so a retry is not a fresh login, and drops them once authorization completes. It requests the page with the WebView marker removed from its user agent, since Reddit serves a degraded login and consent flow to agents that identify as embedded.
 
-For development builds, the client ID and User-Agent can still be supplied as optional defaults in the untracked `local.properties` file:
+Client credentials are never read from `local.properties`, compiled into the APK, or supplied by this repository. On a fresh install the Client ID and User-Agent fields are blank. Values entered in Settings stay in the app's private storage and can be cleared at any time. If the active configuration is incomplete—or no Reddit account is connected—the feed remains blank. Reddit redirects back through the secure Auth Tab result, Currents verifies the returned authorization, confirms the account with Reddit, and stores the refresh token encrypted for future sessions. Changing or clearing the API configuration, or disconnecting the account, removes the local account credentials.
 
-```properties
-reddit.clientId=YOUR_INSTALLED_APP_CLIENT_ID
-reddit.userAgent=android:app.orca.client:v1.0.0 (by /u/YOUR_REDDIT_USERNAME)
-```
-
-These defaults are used only when no in-app override has been saved. If the active configuration is incomplete—or no Reddit account is connected—the feed remains blank. Reddit redirects back through the secure Auth Tab result, Otter verifies the returned authorization, confirms the account with Reddit, and stores the refresh token encrypted for future sessions. Changing the API configuration or disconnecting removes the local account credentials.
-
-Otter requests only these scopes:
+Currents requests only these scopes:
 
 - `identity` — confirm the connected username
 - `read` — load posts and comments
@@ -106,7 +118,7 @@ Otter requests only these scopes:
 - `subscribe` — join or leave communities
 - `account` — request user blocking (Reddit limits this endpoint to approved OAuth apps)
 
-When signed in, reads, votes, saves, posts, and replies use that Reddit account. Signed-out mode does not fabricate or load posts. Otter never embeds a client secret.
+When signed in, reads, votes, saves, posts, and replies use that Reddit account. Signed-out mode does not fabricate or load posts. Currents never embeds a client secret.
 
 Before using or distributing the client, review Reddit's current [Data API Terms](https://redditinc.com/policies/data-api-terms), [Developer Terms](https://redditinc.com/policies/developer-terms), [API access guidance](https://support.reddithelp.com/hc/en-us/articles/14945211791892-Developer-Platform-Accessing-Reddit-Data), and [Data API Wiki](https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki). Commercial or broader distribution may require a separate agreement.
 
@@ -127,7 +139,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 The macrobenchmarks build the `benchmark` variant, which inherits release minification, so
 they measure the shape of build a user actually installs rather than an unminified one.
 
-Open Otter, enter your API values under **Settings → Reddit connection → Reddit API configuration**, connect Reddit, approve the browser authorization, and confirm the Auth Tab returns directly to Otter.
+Open Currents, enter your API values under **Settings → Reddit connection → Reddit API configuration**, connect Reddit, approve the browser authorization, and confirm the Auth Tab returns directly to Currents.
 
 ## Project structure
 
@@ -185,6 +197,16 @@ which keeps `model/` free of any Compose dependency. To confirm a change there l
 ./gradlew.bat assembleRelease -PcomposeMetrics
 ```
 
-## Product boundaries
+## Privacy and project status
 
-Otter is currently designed as a personal, sideloaded client rather than a drop-in public release. A public launch still needs Reddit approval, broader authentication and abuse-case review, rule-aware moderation UX, a privacy policy, release signing, and store assets.
+Currents talks directly to Reddit and the media hosts needed to display the content you open. It has no bundled client ID and no service that lends credentials to users. OAuth refresh tokens are encrypted locally with Android Keystore; clearing the API configuration or disconnecting removes the local account credentials.
+
+This is an independent, community-built client distributed as a sideloaded APK. It is not affiliated with, authorized by, maintained by, or endorsed by Reddit. Reddit is a trademark of Reddit, Inc. Availability of API access, endpoints, and account actions can change, and some features may require Reddit approval. Review Reddit's current terms before use or distribution.
+
+## Contributing
+
+Open an issue for a reproducible bug or a focused feature proposal. Pull requests should keep the project credential-free, preserve the blank first-run Client ID state, include tests for behavior changes, and pass the verification commands above.
+
+## License
+
+Currents is available under the [MIT License](LICENSE).

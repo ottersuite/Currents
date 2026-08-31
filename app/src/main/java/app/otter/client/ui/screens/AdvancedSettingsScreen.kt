@@ -113,7 +113,7 @@ fun AdvancedSettingsScreen(
                 SettingsDivider()
                 SettingsSwitchRow(
                     icon = Icons.Outlined.Smartphone,
-                    title = "Sign in inside Otter",
+                    title = "Sign in inside Currents",
                     subtitle = if (settings.webViewSignIn) {
                         "In-app WebView reads the callback itself"
                     } else {
@@ -173,7 +173,7 @@ fun AdvancedSettingsScreen(
 
         item {
             Text(
-                text = "These settings decide which Reddit app Otter talks to. Nothing here " +
+                text = "These settings decide which Reddit app Currents talks to. Nothing here " +
                     "needs to change once an account is connected.",
                 color = colors.textTertiary,
                 style = MaterialTheme.typography.bodySmall,

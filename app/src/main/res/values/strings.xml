@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Otter</string>
+    <string name="app_name">Currents</string>
     <string name="reddit_sign_in_title">Reddit sign-in</string>
 </resources>

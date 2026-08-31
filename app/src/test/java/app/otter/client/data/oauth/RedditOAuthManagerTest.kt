@@ -7,10 +7,16 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RedditOAuthManagerTest {
+    private companion object {
+        const val NOW = 1_700_000_000_000L
+        const val HOUR_MILLIS = 60L * 60L * 1_000L
+    }
+
     @Test
     fun authorizationUrlUsesInstalledAppFlowAndExactRedirect() {
         val store = InMemoryRedditOAuthStore()
@@ -156,6 +162,91 @@ class RedditOAuthManagerTest {
         assertTrue(result.isFailure)
         assertTrue(manager.accountState.value is RedditAccountState.SignedOut)
     }
+
+    @Test
+    fun aStoredAccessTokenIsReusedWithoutContactingReddit() = runBlocking {
+        val store = InMemoryRedditOAuthStore()
+        val configuration = apiConfiguration()
+        store.saveCredential(configuration.credentialStorageKey(), credential())
+        store.saveAccessToken(
+            configuration.credentialStorageKey(),
+            StoredAccessToken("carried-over-token", NOW + HOUR_MILLIS),
+        )
+
+        // Any attempt to mint a new token would have to reach this host, and fail.
+        val manager = offlineManager(store, configuration)
+
+        assertEquals("carried-over-token", manager.accessToken().value)
+    }
+
+    @Test
+    fun anExpiredStoredAccessTokenIsDiscardedRatherThanReplayed() = runBlocking {
+        val store = InMemoryRedditOAuthStore()
+        val configuration = apiConfiguration()
+        store.saveCredential(configuration.credentialStorageKey(), credential())
+        store.saveAccessToken(
+            configuration.credentialStorageKey(),
+            StoredAccessToken("stale-token", NOW - 1L),
+        )
+
+        val manager = offlineManager(store, configuration)
+
+        // Falls through to a refresh, which cannot reach the network here.
+        assertTrue(runCatching { manager.accessToken() }.isFailure)
+        assertNull(store.loadAccessToken(configuration.credentialStorageKey()))
+    }
+
+    @Test
+    fun signingOutDiscardsTheStoredAccessToken() = runBlocking {
+        val store = InMemoryRedditOAuthStore()
+        val configuration = apiConfiguration()
+        store.saveCredential(configuration.credentialStorageKey(), credential())
+        store.saveAccessToken(
+            configuration.credentialStorageKey(),
+            StoredAccessToken("carried-over-token", NOW + HOUR_MILLIS),
+        )
+
+        offlineManager(store, configuration).disconnect()
+
+        // A token outliving its credential would keep a signed-out session authorized.
+        assertNull(store.loadAccessToken(configuration.credentialStorageKey()))
+        assertNull(store.loadCredential(configuration.credentialStorageKey()))
+    }
+
+    @Test
+    fun aRejectedAccessTokenIsNotLeftOnDiskForTheNextLaunch() = runBlocking {
+        val store = InMemoryRedditOAuthStore()
+        val configuration = apiConfiguration()
+        store.saveCredential(configuration.credentialStorageKey(), credential())
+        store.saveAccessToken(
+            configuration.credentialStorageKey(),
+            StoredAccessToken("rejected-token", NOW + HOUR_MILLIS),
+        )
+        val manager = offlineManager(store, configuration)
+
+        manager.invalidate(manager.accessToken())
+
+        assertNull(store.loadAccessToken(configuration.credentialStorageKey()))
+    }
+
+    private fun credential() = RedditOAuthCredential(
+        refreshToken = "refresh-token",
+        accountId = "t2_account",
+        username = "tester",
+        scopes = RedditOAuthManager.REQUESTED_SCOPES,
+    )
+
+    /** A manager whose token endpoint is unreachable, so any refresh attempt is visible. */
+    private fun offlineManager(
+        store: RedditOAuthStore,
+        configuration: RedditApiConfiguration = apiConfiguration(),
+    ) = RedditOAuthManager(
+        configuration = configuration,
+        store = store,
+        authBaseUrl = "https://127.0.0.1:9",
+        apiBaseUrl = "https://127.0.0.1:9",
+        wallClockMillis = { NOW },
+    )
 
     private fun manager(
         store: RedditOAuthStore,

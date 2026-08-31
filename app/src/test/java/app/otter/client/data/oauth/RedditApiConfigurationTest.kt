@@ -8,6 +8,16 @@ import org.junit.Test
 
 class RedditApiConfigurationTest {
     @Test
+    fun defaultsContainNoClientIdentity() {
+        val configuration = RedditApiConfiguration()
+
+        assertEquals("", configuration.clientId)
+        assertEquals("", configuration.userAgent)
+        assertEquals(RedditApiConfiguration.DEFAULT_REDIRECT_URI, configuration.redirectUri)
+        assertFalse(configuration.isUsable)
+    }
+
+    @Test
     fun normalizedValidConfigurationIsUsable() {
         val configuration = RedditApiConfiguration(
             clientId = "  personal-client_1  ",

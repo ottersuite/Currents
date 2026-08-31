@@ -86,7 +86,24 @@ private val MARKDOWN_LINK = Regex("""(!?)\[([^\]]*)]\(([^)\s]+)(?:\s+"[^"]*")?\)
 private val BARE_URL = Regex("""https?://[^\s<>()\[\]]+""")
 private val GIPHY_EMBED = Regex("""giphy\|([A-Za-z0-9]+)(?:\|\w+)?""")
 private val EMOTE_EMBED = Regex("""emote\|[^)|]+\|\w+""")
-private val MEDIA_SUFFIXES = listOf(".gif", ".gifv", ".mp4", ".webm")
+private val MOTION_SUFFIXES = listOf(".gif", ".gifv", ".mp4", ".webm")
+private val IMAGE_SUFFIXES = listOf(".jpg", ".jpeg", ".png", ".webp", ".avif", ".bmp")
+
+/**
+ * Hosts that only ever serve media.
+ *
+ * `preview.redd.it` is the one worth naming: it hands out resized images whose URL carries the
+ * dimensions in a query string, and a suffix check alone was enough to recognise the path but
+ * nothing recognised the host. Those links were leaving the app for a browser.
+ */
+private val MEDIA_HOSTS = listOf(
+    "preview.redd.it",
+    "i.redd.it",
+    "v.redd.it",
+    "i.imgur.com",
+    "giphy.com",
+    "redgifs.com",
+)
 
 /** Splits a comment into plain runs and links, resolving Reddit's internal media syntax. */
 internal fun parseRedditBody(body: String): List<BodySegment> {
@@ -152,9 +169,9 @@ private fun resolveTarget(target: String): String? {
 
 private fun isMedia(url: String): Boolean {
     val path = url.substringBefore('?').lowercase()
-    return MEDIA_SUFFIXES.any(path::endsWith) ||
-        path.contains("giphy.com") ||
-        path.contains("redgifs.com")
+    return MOTION_SUFFIXES.any(path::endsWith) ||
+        IMAGE_SUFFIXES.any(path::endsWith) ||
+        MEDIA_HOSTS.any(path::contains)
 }
 
 /**
@@ -171,6 +188,7 @@ private fun mediaLabel(url: String, label: String): String {
     val path = url.substringBefore('?').lowercase()
     // A giphy clip arrives as MP4 but is a GIF to anyone reading the thread.
     if (path.contains("giphy.com") || path.contains("redgifs.com")) return "View GIF"
+    if (path.contains("v.redd.it")) return "View video"
     return if (path.endsWith(".mp4") || path.endsWith(".webm")) "View video" else "View GIF"
 }
 

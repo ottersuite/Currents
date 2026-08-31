@@ -4,6 +4,7 @@ import app.otter.client.model.Comment
 import app.otter.client.model.Community
 import app.otter.client.model.Post
 import app.otter.client.model.PostType
+import app.otter.client.model.SubmissionKind
 import app.otter.client.model.VoteState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -43,11 +44,21 @@ open class InMemoryRedditRepository(
         commentFlows.getOrPut(postId) { MutableStateFlow(emptyList()) }.asStateFlow()
     }
 
-    open override fun submitPost(communityName: String, title: String, body: String): Post {
+    open override fun submitPost(
+        communityName: String,
+        title: String,
+        body: String,
+        kind: SubmissionKind,
+        linkUrl: String,
+    ): Post {
         val normalizedCommunity = communityName.trim().removePrefix("r/")
         val normalizedTitle = title.trim()
+        val normalizedUrl = normalizeSubmissionUrl(linkUrl)
         require(normalizedCommunity.isNotEmpty()) { "Community name cannot be blank" }
         require(normalizedTitle.isNotEmpty()) { "Post title cannot be blank" }
+        require(kind != SubmissionKind.LINK || normalizedUrl != null) {
+            "A link post needs a web address"
+        }
 
         synchronized(lock) {
             val community = communities.value.firstOrNull { candidate ->
@@ -59,11 +70,14 @@ open class InMemoryRedditRepository(
                 community = community,
                 title = normalizedTitle,
                 author = "you",
-                type = PostType.TEXT,
+                type = if (kind == SubmissionKind.LINK) PostType.LINK else PostType.TEXT,
                 score = 1,
                 commentCount = 0,
                 createdAtEpochSeconds = System.currentTimeMillis() / 1_000L,
-                body = body.trim().takeIf(String::isNotEmpty),
+                domain = normalizedUrl?.let(::submissionUrlHost),
+                destinationUrl = normalizedUrl,
+                // A link post has no self text, so the body Reddit would show is nothing at all.
+                body = body.trim().takeIf { it.isNotEmpty() && kind == SubmissionKind.TEXT },
                 voteState = VoteState.UPVOTED,
                 isRead = true,
             )
@@ -263,6 +277,9 @@ open class InMemoryRedditRepository(
                         existing.displayName
                     },
                     memberCount = maxOf(existing.memberCount, community.memberCount),
+                    // Only the subscription listing carries styling; a community seen in a post
+                    // has no icon and must not erase one already known.
+                    iconUrl = community.iconUrl ?: existing.iconUrl,
                 )
             }
             mutableCommunities.value = merged

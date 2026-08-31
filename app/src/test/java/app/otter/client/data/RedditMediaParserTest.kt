@@ -67,6 +67,38 @@ class RedditMediaParserTest {
     }
 
     @Test
+    fun aLoopingPostLeadsWithTheStreamThatCarriesAudioUnlessToldItIsSilent() {
+        fun parse(audioField: String) = checkNotNull(
+            RedditMediaParser.parse(
+                JSONObject(
+                    """
+                    {
+                      "is_video": true,
+                      "media": {
+                        "reddit_video": {
+                          "hls_url": "https://v.redd.it/xyz/HLSPlaylist.m3u8",
+                          "dash_url": "https://v.redd.it/xyz/DASHPlaylist.mpd",
+                          "fallback_url": "https://v.redd.it/xyz/DASH_480.mp4",
+                          "width": 480, "height": 480, "duration": 3,
+                          "is_gif": true$audioField
+                        }
+                      }
+                    }
+                    """.trimIndent(),
+                ),
+            ),
+        )
+
+        // The progressive fallback is video only, so a loop that might have sound has to lead
+        // with the adaptive stream -- including when Reddit simply does not say either way.
+        assertTrue(parse(""", "has_audio": true""").first.url.endsWith(".m3u8"))
+        assertTrue(parse("").first.url.endsWith(".m3u8"))
+
+        // Told plainly that there is no audio, the cheap-to-seek progressive file wins.
+        assertTrue(parse(""", "has_audio": false""").first.url.endsWith(".mp4"))
+    }
+
+    @Test
     fun gifPostUsesRedditsMp4EncodingWithTheGifAsFallback() {
         val media = checkNotNull(
             RedditMediaParser.parse(
@@ -208,5 +240,32 @@ class RedditMediaParserTest {
         )
         // The real GIF, which has no format=mp4, is still what an image surface would animate.
         assertEquals("https://preview.redd.it/abc.gif?width=600&s=other", asset.animatedImageUrl)
+    }
+
+    @Test
+    fun aLinkPostPointingAtRedditVideoStillPlays() {
+        // Reddit leaves link posts unexpanded: no `reddit_video`, just the address itself.
+        val media = checkNotNull(
+            RedditMediaParser.parse(
+                JSONObject(
+                    """
+                    {
+                      "url_overridden_by_dest": "https://v.redd.it/linkonly",
+                      "preview": {
+                        "images": [
+                          {"source": {"url": "https://preview.redd.it/still.jpg", "width": 640, "height": 360}}
+                        ]
+                      }
+                    }
+                    """.trimIndent(),
+                ),
+            ),
+        )
+
+        val asset = media.first
+        assertEquals(MediaKind.VIDEO, asset.kind)
+        assertEquals("https://v.redd.it/linkonly/HLSPlaylist.m3u8", asset.url)
+        assertEquals("https://v.redd.it/linkonly/DASHPlaylist.mpd", asset.fallbackUrl)
+        assertEquals("https://preview.redd.it/still.jpg", asset.previewUrl)
     }
 }

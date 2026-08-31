@@ -1,8 +1,13 @@
 package app.otter.client.ui.components
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,6 +42,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,6 +60,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
@@ -63,6 +70,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -70,6 +78,7 @@ import androidx.compose.ui.unit.sp
 import app.otter.client.data.DemoRedditContent
 import app.otter.client.model.MediaKind
 import app.otter.client.model.Post
+import app.otter.client.model.PostMedia
 import app.otter.client.model.PostPreview
 import app.otter.client.model.PostType
 import app.otter.client.model.VoteState
@@ -78,6 +87,34 @@ import app.otter.client.ui.SwipeActionConfig
 import app.otter.client.ui.theme.otterColors
 import coil3.compose.AsyncImage
 import kotlin.math.max
+
+/**
+ * The tappable body of a post, with a flat press tint rather than a ripple.
+ *
+ * A ripple animates outward from the touch point across the whole card. Over a dense feed of
+ * thumbnails and text that reads as a shimmer passing over the content rather than as feedback,
+ * and it is still running while the post screen is already opening. A card either looks pressed
+ * or it does not.
+ */
+@Composable
+private fun Modifier.postSurface(selected: Boolean, onOpen: () -> Unit): Modifier {
+    val colors = MaterialTheme.otterColors
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    return background(
+        when {
+            pressed -> colors.surfaceRaised
+            selected -> colors.accent.copy(alpha = .1f)
+            else -> colors.surface
+        },
+    ).clickable(
+        interactionSource = interactionSource,
+        indication = null,
+        role = Role.Button,
+        onClickLabel = "Open post",
+        onClick = onOpen,
+    )
+}
 
 @Composable
 fun FeedPost(
@@ -133,6 +170,7 @@ fun FeedPost(
                     onOpenMedia = onOpenMedia,
                     textScale = textScale,
                     showFlairs = showFlairs,
+                    hapticsEnabled = hapticsEnabled,
                     selected = isSelected,
                     warningLabel = warningLabel,
                     onRevealMedia = { sensitiveMediaRevealed = true },
@@ -147,6 +185,7 @@ fun FeedPost(
                     onOpenMedia = onOpenMedia,
                     textScale = textScale,
                     showFlairs = showFlairs,
+                    hapticsEnabled = hapticsEnabled,
                     selected = isSelected,
                     warningLabel = warningLabel,
                     onRevealMedia = { sensitiveMediaRevealed = true },
@@ -167,6 +206,7 @@ private fun CompactPost(
     onOpenMedia: () -> Unit,
     textScale: Float,
     showFlairs: Boolean,
+    hapticsEnabled: Boolean,
     selected: Boolean,
     warningLabel: String?,
     onRevealMedia: () -> Unit,
@@ -180,8 +220,7 @@ private fun CompactPost(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(if (selected) colors.accent.copy(alpha = .1f) else colors.surface)
-            .clickable(role = Role.Button, onClickLabel = "Open post", onClick = onOpen)
+            .postSurface(selected = selected, onOpen = onOpen)
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
         Row(verticalAlignment = Alignment.Top) {
@@ -191,6 +230,8 @@ private fun CompactPost(
                     type = post.type,
                     badge = mediaBadgeFor(post),
                     warningLabel = warningLabel,
+                    peekMedia = post.media,
+                    hapticsEnabled = hapticsEnabled,
                     onReveal = onRevealMedia,
                     onOpenMedia = onOpenMedia.takeIf { post.media != null },
                     modifier = Modifier.size(72.dp),
@@ -216,6 +257,8 @@ private fun CompactPost(
                     type = post.type,
                     badge = mediaBadgeFor(post),
                     warningLabel = warningLabel,
+                    peekMedia = post.media,
+                    hapticsEnabled = hapticsEnabled,
                     onReveal = onRevealMedia,
                     onOpenMedia = onOpenMedia.takeIf { post.media != null },
                     modifier = Modifier.size(72.dp),
@@ -237,6 +280,7 @@ private fun LargePreviewPost(
     onOpenMedia: () -> Unit,
     textScale: Float,
     showFlairs: Boolean,
+    hapticsEnabled: Boolean,
     selected: Boolean,
     warningLabel: String?,
     onRevealMedia: () -> Unit,
@@ -248,8 +292,7 @@ private fun LargePreviewPost(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(if (selected) colors.accent.copy(alpha = .1f) else colors.surface)
-            .clickable(role = Role.Button, onClickLabel = "Open post", onClick = onOpen)
+            .postSurface(selected = selected, onOpen = onOpen)
             .padding(top = 11.dp),
     ) {
         Row(
@@ -284,6 +327,8 @@ private fun LargePreviewPost(
                 type = post.type,
                 badge = mediaBadgeFor(post),
                 warningLabel = warningLabel,
+                peekMedia = post.media,
+                hapticsEnabled = hapticsEnabled,
                 onReveal = onRevealMedia,
                 onOpenMedia = onOpenMedia.takeIf { post.media != null },
                 modifier = Modifier
@@ -604,6 +649,14 @@ fun mediaBadgeFor(post: Post): MediaBadge? {
     }
 }
 
+/**
+ * A post's picture, at whatever size the row it sits in draws it.
+ *
+ * [peekMedia] turns a hold into a look: the media fills the screen for as long as the thumb stays
+ * down and is gone the moment it lifts, which answers "what is this" without the round trip
+ * through the viewer. Passing null leaves the hold unclaimed.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PostArtwork(
     preview: PostPreview,
@@ -613,20 +666,46 @@ fun PostArtwork(
     compact: Boolean = false,
     badge: MediaBadge? = null,
     warningLabel: String? = null,
+    peekMedia: PostMedia? = null,
+    hapticsEnabled: Boolean = true,
     onReveal: () -> Unit = {},
     onOpenMedia: (() -> Unit)? = null,
 ) {
     val colors = MaterialTheme.otterColors
     val shape = RoundedCornerShape(cornerRadius.dp)
+    val haptics = LocalHapticFeedback.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    var peeking by remember { mutableStateOf(false) }
+    // There is nothing to enlarge without a full-size copy, and a covered thumbnail must not be
+    // uncoverable by holding it.
+    val canPeek = warningLabel == null &&
+        (peekMedia != null || preview.imageUrl != null || preview.cardImageUrl != null)
+    // The press ends the peek, not the click: a hold is released, never tapped.
+    LaunchedEffect(pressed) { if (!pressed) peeking = false }
+
     Box(
         modifier = modifier
             .clip(shape)
             // The gate owns the tap while it is up: revealing comes before viewing.
             .then(
                 if (onOpenMedia != null && warningLabel == null) {
-                    Modifier.clickable(
+                    Modifier.combinedClickable(
+                        interactionSource = interactionSource,
+                        indication = LocalIndication.current,
                         role = Role.Button,
                         onClickLabel = "View media",
+                        onLongClickLabel = "Peek at media".takeIf { canPeek },
+                        onLongClick = if (canPeek) {
+                            {
+                                if (hapticsEnabled) {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                }
+                                peeking = true
+                            }
+                        } else {
+                            null
+                        },
                         onClick = onOpenMedia,
                     )
                 } else {
@@ -723,6 +802,8 @@ fun PostArtwork(
                 .background(colors.accent.copy(alpha = if (type == PostType.VIDEO) .9f else 0f)),
         )
     }
+
+    if (peeking) MediaPeek(preview = preview, media = peekMedia)
 }
 
 @Composable

@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Otter"
+rootProject.name = "Currents"
 include(":app")
 include(":benchmark")
 include(":baselineprofile")

@@ -27,7 +27,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -64,6 +64,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.layout.ContentScale
+import coil3.compose.AsyncImage
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.input.pointer.pointerInput
@@ -110,13 +113,17 @@ fun OtterSideMenu(
     }
     val favorites = remember(communities) {
         communities.filter(Community::isFavorite)
-            .map(Community::name)
-            .distinct()
+            .distinctBy { community -> community.name.lowercase() }
             // Alphabetical, ignoring case, so r/Android sits next to r/androiddev rather than
             // above every lowercase name. Reddit's own suggestions below keep their ranking.
-            .sortedWith(String.CASE_INSENSITIVE_ORDER)
+            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER, Community::name))
     }
     val shownFavorites = favorites
+
+    // Held outside the AnimatedVisibility below, which disposes its content when the drawer
+    // closes -- taking a scroll position remembered inside it along too. A long subreddit list
+    // reopening at the top every time is the whole reason to hoist it.
+    val listScrollState = rememberSaveable(saver = ScrollState.Saver) { ScrollState(0) }
 
     BackHandler(enabled = visible, onBack = onDismiss)
 
@@ -148,7 +155,7 @@ fun OtterSideMenu(
                 modifier = Modifier
                     .fillMaxHeight()
                     .widthIn(max = 420.dp)
-                    .fillMaxWidth(.86f)
+                    .fillMaxWidth(DRAWER_WIDTH_FRACTION)
                     .background(
                         Brush.horizontalGradient(
                             colors = listOf(
@@ -191,7 +198,7 @@ fun OtterSideMenu(
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
-                            text = "Otter",
+                            text = "Currents",
                             color = colors.textPrimary,
                             fontSize = 20.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -242,7 +249,7 @@ fun OtterSideMenu(
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .verticalScroll(rememberScrollState())
+                        .verticalScroll(listScrollState)
                         .padding(top = 12.dp),
                 ) {
                     DrawerSectionLabel("MAIN")
@@ -260,14 +267,13 @@ fun OtterSideMenu(
                     }
 
                     Spacer(Modifier.height(12.dp))
-                    DrawerSectionLabel("FAVORITES")
+                    DrawerSectionLabel("SUBREDDITS")
                     shownFavorites.forEach { community ->
-                        DrawerRow(
-                            title = community,
-                            icon = Icons.Outlined.StarBorder,
-                            selected = selectedFeed == "r/$community",
+                        CommunityRow(
+                            community = community,
+                            selected = selectedFeed == "r/${community.name}",
                             onClick = {
-                                onSelectFeed("r/$community")
+                                onSelectFeed("r/${community.name}")
                                 onDismiss()
                             },
                         )
@@ -358,6 +364,89 @@ private fun SearchEntry(onClick: () -> Unit, modifier: Modifier = Modifier) {
         }
     }
 }
+
+/**
+ * A subreddit in the list: its own icon, its name, and as little else as possible.
+ *
+ * Deliberately tighter and quieter than [DrawerRow]. That row is for a handful of destinations
+ * that each earn a subtitle; this one repeats for every community subscribed to, where the list
+ * being scannable matters more than any single line being prominent.
+ */
+@Composable
+private fun CommunityRow(
+    community: Community,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = MaterialTheme.otterColors
+    Row(
+        modifier = Modifier
+            .padding(horizontal = 8.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) colors.accent.copy(alpha = .14f) else Color.Transparent)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = COMMUNITY_ROW_PADDING),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(COMMUNITY_ICON_SIZE)
+                .clip(CircleShape)
+                // The community's accent sits underneath, so a subreddit with no icon still
+                // reads as itself rather than as a grey hole in the list.
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            Color(community.accentStartArgb),
+                            Color(community.accentEndArgb),
+                        ),
+                    ),
+                ),
+        ) {
+            val icon = community.iconUrl
+            if (icon != null) {
+                AsyncImage(
+                    model = icon,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().clip(CircleShape),
+                )
+            } else {
+                Text(
+                    text = community.name.take(1).uppercase(),
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = community.name,
+            color = if (selected) colors.accent else colors.textPrimary,
+            fontSize = COMMUNITY_ROW_FONT_SIZE,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * How much of the screen the panel covers.
+ *
+ * The cap above only matters on a tablet; on a phone this fraction is what decides the width,
+ * and it also decides how much of a community's name survives before it is ellipsized. At .86
+ * the panel covered the feed almost entirely; at .25 a name got about six characters.
+ */
+private const val DRAWER_WIDTH_FRACTION = .65f
+
+/** Sized for a list that repeats, rather than for a row that appears once. */
+private val COMMUNITY_ICON_SIZE = 26.dp
+private val COMMUNITY_ROW_PADDING = 5.dp
+private val COMMUNITY_ROW_FONT_SIZE = 14.sp
 
 @Composable
 private fun DrawerSectionLabel(text: String) {

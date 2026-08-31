@@ -23,6 +23,9 @@ internal object RedditMediaParser {
             ?: animated(data)
             ?: directLink(data)
             ?: crosspostParent(data)?.let(::parse)
+            // Last, because a crosspost's parent describes the same video far better than its
+            // address does: a duration, real dimensions, and whether there is audio to unmute.
+            ?: redditVideoLink(data)
 
     private fun crosspostParent(data: JSONObject): JSONObject? =
         data.optJSONArray("crosspost_parent_list")?.optJSONObject(0)
@@ -87,10 +90,20 @@ internal object RedditMediaParser {
         // Reddit's is_gif flag describes looping presentation, not reliably the absence of audio.
         val silent = video.optBoolean("is_gif")
         val hasAudio = video.optBoolean("has_audio", !silent)
-        // Adaptive streams exist to carry an audio track and adjust quality; a silent loop needs
-        // neither, and seeking inside one costs a network fetch per seek. The progressive file
-        // is a local read once buffered, which is what makes scrubbing feel immediate.
-        val primary = if (silent) {
+
+        // Reddit's progressive `fallback_url` carries no audio at all — the sound lives in a
+        // separate track that only the adaptive manifests combine. So the progressive file is
+        // only safe to lead with when Reddit has actually told us there is nothing to lose.
+        //
+        // The test is deliberately "did it say no", not "did it say yes": `has_audio` is simply
+        // absent on plenty of posts, and treating unknown as silent is what left GIFs playing a
+        // video-only file that no amount of unmuting could recover sound from. Unknown now takes
+        // the adaptive stream, which costs a manifest fetch and buys back the audio track.
+        //
+        // A declared-silent loop keeps the progressive file, and with it the cheap seeking: it
+        // is a local read once buffered, where seeking inside an adaptive stream costs a fetch.
+        val declaredSilent = video.has("has_audio") && !video.optBoolean("has_audio")
+        val primary = if (declaredSilent) {
             fallback ?: hls ?: dash ?: return null
         } else {
             hls ?: dash ?: fallback ?: return null
@@ -131,6 +144,22 @@ internal object RedditMediaParser {
                 ),
             ),
         )
+    }
+
+    /**
+     * A `v.redd.it` address Reddit did not expand into a `reddit_video` block.
+     *
+     * It happens on link posts, and on crossposts whose parent the listing left out. The address
+     * itself is a web page, so the streams underneath it have to be named directly.
+     */
+    private fun redditVideoLink(data: JSONObject): PostMedia? {
+        val link = data.url("url_overridden_by_dest") ?: data.url("url") ?: return null
+        val asset = RedditVideoLinks.asset(
+            url = link,
+            previewUrl = previewImage(data),
+            aspectRatio = previewRatio(data),
+        ) ?: return null
+        return PostMedia(listOf(asset))
     }
 
     /** Last resort: trust the link's own extension. */

@@ -25,6 +25,9 @@ data class CachedFeed(
     val updatedAtMillis: Long,
 )
 
+/** A stored string alongside the moment it was written. */
+data class CachedValue(val payload: String, val updatedAtMillis: Long)
+
 data class CachedComments(
     val comments: List<Comment>,
     val sort: String,
@@ -116,16 +119,27 @@ class OfflineCacheStore(context: Context) {
         trim(COMMENTS, MAX_COMMENT_THREADS)
     }
 
-    fun draft(key: String): String? = helper.readableDatabase.query(
+    fun draft(key: String): String? = storedValue(key)?.payload
+
+    /**
+     * A stored string and when it was written.
+     *
+     * The same table backs saved drafts and anything else small the app wants to keep between
+     * launches; the timestamp is what lets a caller decide whether its copy has gone stale.
+     */
+    fun storedValue(key: String): CachedValue? = helper.readableDatabase.query(
         DRAFTS,
-        arrayOf(PAYLOAD),
+        arrayOf(PAYLOAD, UPDATED_AT),
         "$KEY = ?",
         arrayOf(key),
         null,
         null,
         null,
         "1",
-    ).use { cursor -> cursor.takeIf { it.moveToFirst() }?.getString(0) }
+    ).use { cursor ->
+        if (!cursor.moveToFirst()) return@use null
+        cursor.getString(0)?.let { payload -> CachedValue(payload, cursor.getLong(1)) }
+    }
 
     fun putDraft(key: String, payload: String?) {
         if (payload.isNullOrBlank()) {
@@ -271,6 +285,7 @@ private object JsonCodec {
         put("favorite", isFavorite)
         put("accentStart", accentStartArgb)
         put("accentEnd", accentEndArgb)
+        putNullable("icon", iconUrl)
     }
 
     private fun community(value: JSONObject) = Community(
@@ -280,6 +295,7 @@ private object JsonCodec {
         isFavorite = value.optBoolean("favorite"),
         accentStartArgb = value.optLong("accentStart"),
         accentEndArgb = value.optLong("accentEnd"),
+        iconUrl = value.optString("icon").takeIf(String::isNotBlank),
     )
 
     private fun PostPreview.toJson() = JSONObject().apply {
@@ -348,6 +364,7 @@ private object JsonCodec {
         put("score", score)
         put("createdAt", createdAtEpochSeconds)
         put("vote", voteState.name)
+        putNullable("flair", authorFlair)
         put("submitter", isSubmitter)
         put("distinguished", isDistinguished)
         put("edited", isEdited)
@@ -366,6 +383,7 @@ private object JsonCodec {
         score = value.optInt("score"),
         createdAtEpochSeconds = value.optLong("createdAt"),
         voteState = enumValueOr(value.optString("vote"), VoteState.NONE),
+        authorFlair = value.stringOrNull("flair"),
         isSubmitter = value.optBoolean("submitter"),
         isDistinguished = value.optBoolean("distinguished"),
         isEdited = value.optBoolean("edited"),

@@ -9,7 +9,13 @@ class InMemoryRedditOAuthStore : RedditOAuthStore {
         val credential: RedditOAuthCredential,
     )
 
+    private data class ScopedAccessToken(
+        val configurationKey: String,
+        val token: StoredAccessToken,
+    )
+
     private var storedCredential: ScopedCredential? = null
+    private var storedAccessToken: ScopedAccessToken? = null
     private var pendingStateDigest: ByteArray? = null
     private var pendingIssuedAtEpochMillis: Long? = null
     private val pendingRevocations = linkedMapOf<String, MutableList<String>>()
@@ -35,8 +41,30 @@ class InMemoryRedditOAuthStore : RedditOAuthStore {
     }
 
     @Synchronized
+    override fun loadAccessToken(configurationKey: String): StoredAccessToken? {
+        val stored = storedAccessToken ?: return null
+        if (configurationKey.isBlank() || stored.configurationKey != configurationKey) {
+            storedAccessToken = null
+            return null
+        }
+        return stored.token
+    }
+
+    @Synchronized
+    override fun saveAccessToken(configurationKey: String, token: StoredAccessToken?): Boolean {
+        if (configurationKey.isBlank()) return false
+        storedAccessToken = token
+            ?.takeIf { it.value.isNotBlank() }
+            ?.let { ScopedAccessToken(configurationKey, it) }
+        return true
+    }
+
+    @Synchronized
     override fun clearCredential(): Boolean {
         storedCredential = null
+        // A token outliving the credential it was minted from would keep a signed-out session
+        // making authorized requests until it expired.
+        storedAccessToken = null
         return true
     }
 

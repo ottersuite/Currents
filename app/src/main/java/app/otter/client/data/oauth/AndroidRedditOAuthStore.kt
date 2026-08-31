@@ -20,8 +20,14 @@ import javax.crypto.spec.GCMParameterSpec
  * Android-backed Reddit credential storage.
  *
  * The refresh token is encrypted using a non-exportable Android Keystore AES-256 key and a new
- * GCM IV on every write. Account metadata and scopes are intentionally non-secret. OAuth access
- * tokens are never accepted by this API and therefore cannot be persisted here.
+ * GCM IV on every write. Account metadata and scopes are intentionally non-secret.
+ *
+ * The short-lived access token is kept too, under the same key but a separate AAD domain so one
+ * ciphertext can never be replayed as the other. It is the weaker of the two secrets — it expires
+ * within the hour and cannot mint anything — while the refresh token it is derived from is
+ * already stored here and can mint access tokens indefinitely. Keeping it removes a network
+ * round trip from the front of every cold start. Sign-out deletes the Keystore key, which leaves
+ * both ciphertexts undecryptable regardless of what is still on disk.
  */
 @SuppressLint("ApplySharedPref", "UseKtx") // Sign-out must be durable before the token is gone.
 class AndroidRedditOAuthStore(context: Context) : RedditOAuthStore {
@@ -100,6 +106,58 @@ class AndroidRedditOAuthStore(context: Context) : RedditOAuthStore {
             null
         }
     }
+
+    override fun loadAccessToken(configurationKey: String): StoredAccessToken? =
+        synchronized(STORE_LOCK) {
+            if (configurationKey.isBlank()) return@synchronized null
+            val blob = preferences.getString(KEY_ACCESS_TOKEN_BLOB, null)
+            if (blob.isNullOrBlank()) return@synchronized null
+            val expiresAt = preferences.getLong(KEY_ACCESS_TOKEN_EXPIRES_AT, 0L)
+            if (expiresAt <= 0L) {
+                clearAccessTokenLocked()
+                return@synchronized null
+            }
+            try {
+                val value = decrypt(KEYSTORE_ALIAS, configurationKey, blob, ACCESS_TOKEN_DOMAIN)
+                if (value.isBlank()) {
+                    clearAccessTokenLocked()
+                    null
+                } else {
+                    StoredAccessToken(value, expiresAt)
+                }
+            } catch (_: GeneralSecurityException) {
+                // Unreadable for any reason -- a rotated key, a tampered blob -- is simply a
+                // cache miss. The refresh token is still there to mint a new one.
+                clearAccessTokenLocked()
+                null
+            } catch (_: IllegalArgumentException) {
+                clearAccessTokenLocked()
+                null
+            }
+        }
+
+    override fun saveAccessToken(configurationKey: String, token: StoredAccessToken?): Boolean =
+        synchronized(STORE_LOCK) {
+            if (configurationKey.isBlank()) return@synchronized false
+            if (token == null || token.value.isBlank() || token.expiresAtEpochMillis <= 0L) {
+                return@synchronized clearAccessTokenLocked()
+            }
+            try {
+                val blob = encrypt(KEYSTORE_ALIAS, configurationKey, token.value, ACCESS_TOKEN_DOMAIN)
+                preferences.edit()
+                    .putString(KEY_ACCESS_TOKEN_BLOB, blob)
+                    .putLong(KEY_ACCESS_TOKEN_EXPIRES_AT, token.expiresAtEpochMillis)
+                    .commit()
+            } catch (_: GeneralSecurityException) {
+                // Failing to cache a token is not a failure worth propagating: the caller can
+                // always refresh. Make sure a stale blob is not left behind, though.
+                clearAccessTokenLocked()
+                false
+            } catch (_: IllegalArgumentException) {
+                clearAccessTokenLocked()
+                false
+            }
+        }
 
     override fun clearCredential(): Boolean = synchronized(STORE_LOCK) {
         val preferencesCleared = clearCredentialLocked()
@@ -335,6 +393,15 @@ class AndroidRedditOAuthStore(context: Context) : RedditOAuthStore {
         .remove(KEY_ACCOUNT_ID)
         .remove(KEY_USERNAME)
         .remove(KEY_SCOPES)
+        // The access token goes with the credential it came from. Leaving it would let a
+        // signed-out session keep making authorized requests until it expired.
+        .remove(KEY_ACCESS_TOKEN_BLOB)
+        .remove(KEY_ACCESS_TOKEN_EXPIRES_AT)
+        .commit()
+
+    private fun clearAccessTokenLocked(): Boolean = preferences.edit()
+        .remove(KEY_ACCESS_TOKEN_BLOB)
+        .remove(KEY_ACCESS_TOKEN_EXPIRES_AT)
         .commit()
 
     private fun clearPendingAuthorizationLocked(): Boolean = preferences.edit()
@@ -367,6 +434,10 @@ class AndroidRedditOAuthStore(context: Context) : RedditOAuthStore {
         private const val KEY_ACCOUNT_ID = "account_id"
         private const val KEY_USERNAME = "username"
         private const val KEY_SCOPES = "scopes"
+        private const val KEY_ACCESS_TOKEN_BLOB = "access_token_blob"
+        private const val KEY_ACCESS_TOKEN_EXPIRES_AT = "access_token_expires_at"
+        private const val ACCESS_TOKEN_DOMAIN = "access_token"
+
         private const val KEY_PENDING_STATE_DIGEST = "pending_state_digest"
         private const val KEY_PENDING_ISSUED_AT = "pending_issued_at"
         private const val KEY_PENDING_REVOCATIONS_BLOB = "pending_revocations_blob"

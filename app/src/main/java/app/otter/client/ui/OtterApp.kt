@@ -227,6 +227,9 @@ private fun OtterAppContent(
                     onOpenSearch = viewModel::openSearch,
                     onToggleSearch = viewModel::toggleSearch,
                     onSearchQueryChange = viewModel::updateSearch,
+                    onSubmitSearch = { query ->
+                        viewModel.searchPosts(query, viewModel.currentCommunity)
+                    },
                     onSortChange = viewModel::setFeedSort,
                     onTimeframeChange = viewModel::setFeedTimeframe,
                     onRefresh = viewModel::refresh,
@@ -269,6 +272,9 @@ private fun OtterAppContent(
                     onOpenSearch = viewModel::openSearch,
                                     onToggleSearch = viewModel::toggleSearch,
                                     onSearchQueryChange = viewModel::updateSearch,
+                                    onSubmitSearch = { query ->
+                                        viewModel.searchPosts(query, viewModel.currentCommunity)
+                                    },
                                     onSortChange = viewModel::setFeedSort,
                                     onTimeframeChange = viewModel::setFeedTimeframe,
                                     onRefresh = viewModel::refresh,
@@ -370,6 +376,12 @@ private fun OtterAppContent(
                 AppScreen.Search -> SearchScreen(
                     query = searchDraft,
                     suggestions = searchSuggestions,
+                    // Search opens over whatever feed was being read, so that feed is still the
+                    // one selected and is what the search should be able to narrow to.
+                    community = selectedFeed
+                        .takeIf { it.startsWith("r/", ignoreCase = true) }
+                        ?.drop(2)
+                        ?.takeIf(String::isNotEmpty),
                     onQueryChange = viewModel::updateSearchDraft,
                     onSearchPosts = viewModel::searchPosts,
                     onOpenCommunity = { name -> viewModel.selectFeed("r/$name") },
@@ -387,27 +399,6 @@ private fun OtterAppContent(
                 onOpen = { drawerVisible = true },
                 modifier = Modifier.align(Alignment.CenterEnd),
             )
-        }
-
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .windowInsetsPadding(WindowInsets.navigationBars)
-                .padding(horizontal = 20.dp, vertical = 84.dp),
-        ) { data ->
-            Surface(
-                color = colors.surfaceGlass,
-                contentColor = colors.textPrimary,
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(13.dp),
-                shadowElevation = 10.dp,
-            ) {
-                Text(
-                    data.visuals.message,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                )
-            }
         }
 
         OtterSideMenu(
@@ -436,9 +427,7 @@ private fun OtterAppContent(
         PostComposerSheet(
             communities = communities,
             initialDraft = postDraft,
-            onDraftChange = { draft ->
-                viewModel.updatePostDraft(draft.title, draft.body, draft.community)
-            },
+            onDraftChange = viewModel::updatePostDraft,
             onDismiss = viewModel::hideComposer,
             onSubmit = viewModel::submitPost,
         )
@@ -446,7 +435,39 @@ private fun OtterAppContent(
 
     // Above every sheet and bar: full-screen media owns the screen while it is open.
     mediaViewer?.let { request ->
-        MediaViewerScreen(request = request, onClose = viewModel::closeMedia)
+        MediaViewerScreen(
+            request = request,
+            onClose = viewModel::closeMedia,
+            hapticsEnabled = settings.haptics,
+            onSaveMedia = viewModel::saveMedia,
+            onSaveDenied = { viewModel.notify("Currents needs storage access to save media") },
+        )
+    }
+
+    // Last of all, and in a layer of its own: the media viewer is a sibling of the content Box
+    // rather than a child of it, so a snackbar inside that Box was drawn *under* the viewer's
+    // backdrop. Saving media from the viewer worked and looked like it had done nothing.
+    Box(modifier = Modifier.fillMaxSize()) {
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(horizontal = 20.dp, vertical = 84.dp),
+        ) { data ->
+            Surface(
+                color = colors.surfaceGlass,
+                contentColor = colors.textPrimary,
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(13.dp),
+                shadowElevation = 10.dp,
+            ) {
+                Text(
+                    data.visuals.message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                )
+            }
+        }
     }
 
     replyTarget?.let { target ->

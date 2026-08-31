@@ -13,14 +13,14 @@ import app.otter.client.ui.screens.SettingsScreen
 import app.otter.client.ui.theme.OtterTheme
 
 @Preview(
-    name = "Otter · compact feed",
+    name = "Currents · compact feed",
     widthDp = 412,
     heightDp = 915,
     showBackground = true,
     uiMode = Configuration.UI_MODE_NIGHT_YES,
 )
 @Preview(
-    name = "Otter · large text",
+    name = "Currents · large text",
     widthDp = 412,
     heightDp = 915,
     fontScale = 1.3f,
@@ -48,6 +48,7 @@ private fun DarkFeedPreview() {
             onOpenSearch = {},
             onToggleSearch = {},
             onSearchQueryChange = {},
+            onSubmitSearch = {},
             onSortChange = {},
             onTimeframeChange = {},
             onRefresh = {},
@@ -66,14 +67,14 @@ private fun DarkFeedPreview() {
 }
 
 @Preview(
-    name = "Otter · post and comments",
+    name = "Currents · post and comments",
     widthDp = 412,
     heightDp = 915,
     showBackground = true,
     uiMode = Configuration.UI_MODE_NIGHT_YES,
 )
 @Preview(
-    name = "Otter · tablet reader pane",
+    name = "Currents · tablet reader pane",
     widthDp = 720,
     heightDp = 800,
     showBackground = true,
@@ -109,7 +110,7 @@ private fun PostPreview() {
 }
 
 @Preview(
-    name = "Otter · advanced settings",
+    name = "Currents · advanced settings",
     widthDp = 412,
     heightDp = 915,
     showBackground = true,
@@ -135,7 +136,7 @@ private fun AdvancedSettingsPreview() {
 }
 
 @Preview(
-    name = "Otter · light settings",
+    name = "Currents · light settings",
     widthDp = 412,
     heightDp = 915,
     showBackground = true,

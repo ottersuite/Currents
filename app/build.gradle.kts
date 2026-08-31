@@ -1,19 +1,10 @@
 import com.android.build.api.variant.BuildConfigField
-import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.androidx.baselineprofile)
 }
-
-val localProperties = Properties().apply {
-    val file = rootProject.file("local.properties")
-    if (file.exists()) file.inputStream().use(::load)
-}
-
-fun String.asBuildConfigString(): String =
-    "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 android {
     namespace = "app.otter.client"
@@ -28,16 +19,6 @@ android {
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField(
-            "String",
-            "REDDIT_CLIENT_ID",
-            localProperties.getProperty("reddit.clientId", "").asBuildConfigString(),
-        )
-        buildConfigField(
-            "String",
-            "REDDIT_USER_AGENT",
-            localProperties.getProperty("reddit.userAgent", "").asBuildConfigString(),
-        )
         buildConfigField("boolean", "BENCHMARK_MODE", "false")
     }
 

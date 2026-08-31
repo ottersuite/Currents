@@ -18,6 +18,9 @@ object OtterHttp {
         OkHttpClient.Builder()
             .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            // Counts image bytes so the viewer can show real progress instead of a spinner.
+            // Non-image responses are passed straight through.
+            .addNetworkInterceptor(MediaLoadProgress.interceptor)
             .build()
     }
 

@@ -14,8 +14,13 @@ import app.otter.client.data.MediaCache
 import app.otter.client.data.OfflineCacheStore
 import app.otter.client.data.OtterPreferences
 import app.otter.client.data.ReadPostStore
+import app.otter.client.data.MediaSaveResult
+import app.otter.client.data.MediaSaver
+import app.otter.client.data.RedGifsClient
+import app.otter.client.data.RedditVideoLinks
 import app.otter.client.data.RedditApiRepository
 import app.otter.client.data.RedditRepository
+import app.otter.client.data.normalizeSubmissionUrl
 import app.otter.client.data.oauth.AndroidRedditApiConfigurationStore
 import app.otter.client.data.oauth.AndroidRedditOAuthStore
 import app.otter.client.data.oauth.RedditApiConfiguration
@@ -27,6 +32,7 @@ import app.otter.client.model.MediaKind
 import app.otter.client.model.Post
 import app.otter.client.ui.screens.MediaViewerRequest
 import app.otter.client.model.RedditAccountState
+import app.otter.client.model.SubmissionKind
 import app.otter.client.model.VoteState
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
@@ -53,6 +59,7 @@ import kotlinx.coroutines.withContext
 import app.otter.client.ui.components.SwipeAction
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.json.JSONArray
 import org.json.JSONObject
 
 enum class AppScreen {
@@ -135,7 +142,7 @@ data class OtterSettings(
 
 /** Shown when the in-app flow is switched on, since it trades away the Auth Tab's isolation. */
 const val WEB_VIEW_SIGN_IN_RATIONALE: String =
-    "Reddit's login page will now open inside Otter. Only use this for a client ID whose " +
+    "Reddit's login page will now open inside Currents. Only use this for a client ID whose " +
         "redirect URI no browser can hand back to this app."
 
 
@@ -158,6 +165,9 @@ data class PostDraft(
     val title: String = "",
     val body: String = "",
     val community: String = "",
+    val kind: SubmissionKind = SubmissionKind.TEXT,
+    /** Only carried by a [SubmissionKind.LINK] draft; kept across kind switches so toggling back and forth does not discard what was typed. */
+    val linkUrl: String = "",
 )
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
@@ -170,13 +180,7 @@ class OtterViewModel @JvmOverloads constructor(
     private val preferences =
         application.getSharedPreferences(OtterPreferences.SETTINGS, Context.MODE_PRIVATE)
     private val usesRepositoryOverride = repositoryOverride != null
-    private val apiConfigurationStore = AndroidRedditApiConfigurationStore(
-        context = application,
-        buildDefaults = RedditApiConfiguration(
-            clientId = BuildConfig.REDDIT_CLIENT_ID,
-            userAgent = BuildConfig.REDDIT_USER_AGENT,
-        ),
-    )
+    private val apiConfigurationStore = AndroidRedditApiConfigurationStore(application)
     private val _redditApiConfiguration = MutableStateFlow(apiConfigurationStore.load())
     val redditApiConfiguration = _redditApiConfiguration.asStateFlow()
 
@@ -186,6 +190,8 @@ class OtterViewModel @JvmOverloads constructor(
     private val repository: RedditRepository
         get() = repositoryState.value
 
+    private val redGifs = RedGifsClient()
+    private var mediaViewerGeneration = 0
     private val readPostStore = ReadPostStore(application)
     private val offlineCache = OfflineCacheStore(application)
     private val _readPostIds = MutableStateFlow(readPostStore.ids())
@@ -315,21 +321,50 @@ class OtterViewModel @JvmOverloads constructor(
     private val _postDraft = MutableStateFlow(PostDraft())
     val postDraft = _postDraft.asStateFlow()
 
+    /** Restores the random-community pool from disk; the random button waits on it. */
+    private var adultPoolSeedJob: Job? = null
     private var feedJob: Job? = null
     private var commentJob: Job? = null
     private var feedRequestGeneration = 0
     private var commentRequestGeneration = 0
 
     init {
-        viewModelScope.launch {
-            if (!usesRepositoryOverride) {
+        if (!usesRepositoryOverride) {
+            adultPoolSeedJob = viewModelScope.launch {
+                val stored = withContext(Dispatchers.IO) { offlineCache.storedValue(ADULT_POOL_KEY) }
+                    ?: return@launch
+                val names = decodeCommunityNames(stored.payload)
+                if (names.isNotEmpty()) {
+                    repository.seedRandomCommunityPool(names, stored.updatedAtMillis)
+                }
+            }
+        }
+
+        // The saved draft is only needed once the composer opens, so it gets its own coroutine.
+        // Read in sequence it sat in front of the cached feed, which is the thing the user is
+        // actually waiting to see.
+        if (!usesRepositoryOverride) {
+            viewModelScope.launch {
                 withContext(Dispatchers.IO) { offlineCache.draft(POST_DRAFT_KEY) }
                     ?.let(::decodePostDraft)
                     ?.let { _postDraft.value = it }
             }
+        }
+        viewModelScope.launch {
+            // Started before the disk read rather than after it. The first Reddit request cannot
+            // go out until an access token exists, and obtaining one can cost a round trip, so
+            // that wait overlaps reading the cache instead of queueing behind it.
+            if (repository.isLive && repository.accountState.value is RedditAccountState.SignedIn) {
+                launch { repository.warmAccountSession() }
+            }
+            // One request now turns the session's first RedGifs lookup from two round trips
+            // into one, and that first one is the wait that gets noticed.
+            if (!usesRepositoryOverride) launch { redGifs.warmUp() }
             if (!usesRepositoryOverride && repository.feed.value.isEmpty()) {
                 val cached = withContext(Dispatchers.IO) { offlineCache.feed("Home") }
-                if (cached != null && _selectedFeed.value == "Home") restoreCachedFeed("Home", cached)
+                if (cached != null && _selectedFeed.value == "Home") {
+                    restoreCachedFeed("Home", cached, resuming = true)
+                }
             }
             if (repository.isLive && repository.accountState.value is RedditAccountState.SignedIn) {
                 refreshInternal(showSuccessMessage = false)
@@ -352,10 +387,16 @@ class OtterViewModel @JvmOverloads constructor(
             return
         }
         viewModelScope.launch {
+            // Without this the first tap of a launch could start harvesting before the stored
+            // pool had finished loading, and pay for a search it already had the answer to.
+            adultPoolSeedJob?.join()
             _refreshing.value = true
             val chosen = repository.randomNsfwCommunity()
             chosen
-                .onSuccess { community -> selectFeed("r/$community") }
+                .onSuccess { community ->
+                    selectFeed("r/$community")
+                    persistAdultPool()
+                }
                 .onFailure { error ->
                     _refreshing.value = false
                     _message.value = error.message ?: "Could not find a random community"
@@ -400,13 +441,16 @@ class OtterViewModel @JvmOverloads constructor(
             return
         }
         currentScroll = FeedScroll()
-        _feedScrollTarget.value = null
+        // A new feed explicitly starts at the top. Keeping this as a real target (instead of
+        // using null to mean "top") lets the UI distinguish a feed change from returning to the
+        // same feed after reading a post, when its existing LazyListState must be left alone.
+        _feedScrollTarget.value = currentScroll
         if (repository.accountState.value is RedditAccountState.SignedIn) {
             if (!usesRepositoryOverride) {
                 viewModelScope.launch {
                     val diskCached = withContext(Dispatchers.IO) { offlineCache.feed(feed) }
                     if (_selectedFeed.value == feed && diskCached != null) {
-                        restoreCachedFeed(feed, diskCached)
+                        restoreCachedFeed(feed, diskCached, resuming = restoreCached)
                     }
                     if (_selectedFeed.value == feed) refreshInternal(showSuccessMessage = false)
                 }
@@ -455,12 +499,32 @@ class OtterViewModel @JvmOverloads constructor(
         }
     }
 
-    private fun restoreCachedFeed(key: String, cached: CachedFeed) {
+    /**
+     * Publishes a feed read back from disk.
+     *
+     * This lands *after* [showFeed] has already positioned the feed, because the read is
+     * asynchronous, so it has to know why the feed is being shown. [resuming] is true when the
+     * user is returning to a feed — a cold start, or back out of one they navigated into — and
+     * false when they have just picked this feed, which is a request to see what is at the top
+     * of it right now. Restoring the old position and sort in that second case is what made a
+     * freshly chosen community open part-way down, under whatever sort was last used there.
+     */
+    private fun restoreCachedFeed(key: String, cached: CachedFeed, resuming: Boolean) {
         if (cached.posts.isEmpty()) return
         repository.restoreFeed(cached.posts)
-        _feedSort.value = enumValueOr(cached.sort, FeedSort.Best)
-        _feedTimeframe.value = enumValueOr(cached.timeframe, FeedTimeframe.Today)
-        currentScroll = FeedScroll(cached.scrollIndex, cached.scrollOffset)
+        currentScroll = if (resuming) {
+            // Returning should look like returning: the chip has to describe the posts being
+            // put back, and the list has to land on the row it was left on.
+            _feedSort.value = enumValueOr(cached.sort, FeedSort.Best)
+            _feedTimeframe.value = enumValueOr(cached.timeframe, FeedTimeframe.Today)
+            FeedScroll(cached.scrollIndex, cached.scrollOffset)
+        } else {
+            // A fresh choice keeps the defaults showFeed just set. These posts are only here so
+            // the screen is not empty while the refresh already in flight arrives — and that
+            // refresh reads _feedSort, so restoring the cached sort here would also silently
+            // carry the last visit's sort into the new request.
+            FeedScroll()
+        }
         _feedScrollTarget.value = currentScroll
         feedCache[key] = FeedSnapshot(
             cached.posts,
@@ -482,6 +546,7 @@ class OtterViewModel @JvmOverloads constructor(
     fun setFeedTimeframe(timeframe: FeedTimeframe) {
         if (_feedTimeframe.value == timeframe) return
         _feedTimeframe.value = timeframe
+        resetFeedScroll()
         preferences.edit { putString("feedTimeframe", timeframe.name) }
         if (repository.accountState.value is RedditAccountState.SignedIn) {
             refreshInternal(showSuccessMessage = false)
@@ -489,10 +554,17 @@ class OtterViewModel @JvmOverloads constructor(
     }
 
     fun setFeedSort(sort: FeedSort) {
+        if (_feedSort.value == sort) return
         _feedSort.value = sort
+        resetFeedScroll()
         if (repository.accountState.value is RedditAccountState.SignedIn) {
             refreshInternal(showSuccessMessage = false)
         }
+    }
+
+    private fun resetFeedScroll() {
+        currentScroll = FeedScroll()
+        _feedScrollTarget.value = currentScroll
     }
 
     /** Re-fetches the open post's comments; the pull gesture on the post screen calls this. */
@@ -576,6 +648,9 @@ class OtterViewModel @JvmOverloads constructor(
 
     fun openPost(postId: String) {
         markPostRead(postId)
+        // Opening a post is the best warning that its media is about to be tapped, so the
+        // RedGifs lookup starts now rather than when the viewer is already on screen.
+        prefetchRedGifs(repository.post(postId)?.destinationUrl)
         _selectedPostId.value = postId
         _collapsedCommentIds.value = emptySet()
         _screen.value = AppScreen.Post
@@ -606,11 +681,26 @@ class OtterViewModel @JvmOverloads constructor(
     }
 
     /** Site-wide post search, opened as a feed so sorting and refreshing work as usual. */
-    fun searchPosts(query: String) {
+    /**
+     * Opens a search as a feed, so it sorts, refreshes and pages like any other.
+     *
+     * With a [community] the search is restricted to it. Searching from inside a community is
+     * almost always meant to be about that community — the whole of Reddit is a different
+     * question, and one the search screen still offers separately.
+     */
+    fun searchPosts(query: String, community: String? = null) {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return
-        selectFeed("q/$trimmed")
+        val scope = community?.removePrefix("r/")?.trim()?.takeIf(String::isNotEmpty)
+        selectFeed(if (scope == null) "q/$trimmed" else "qr/$scope/$trimmed")
     }
+
+    /** The community currently being browsed, or null when the feed is not one. */
+    val currentCommunity: String?
+        get() = _selectedFeed.value
+            .takeIf { it.startsWith("r/", ignoreCase = true) }
+            ?.drop(2)
+            ?.takeIf(String::isNotEmpty)
 
     fun openUserPosts(username: String) {
         val trimmed = username.trim().removePrefix("u/").removePrefix("/u/")
@@ -781,11 +871,11 @@ class OtterViewModel @JvmOverloads constructor(
     fun resetRedditApiConfiguration(): Boolean {
         if (!canStartApiConfigurationUpdate()) return false
         if (!runCatching(apiConfigurationStore::reset).getOrDefault(false)) {
-            _message.value = "Reddit API defaults could not be restored"
+            _message.value = "Reddit API settings could not be cleared"
             return false
         }
         applyRedditApiConfiguration(
-            configuration = apiConfigurationStore.defaults(),
+            configuration = apiConfigurationStore.emptyConfiguration(),
             resetToBuildDefaults = true,
         )
         return true
@@ -804,7 +894,7 @@ class OtterViewModel @JvmOverloads constructor(
         val current = _redditApiConfiguration.value
         if (current == configuration) {
             _message.value = if (resetToBuildDefaults) {
-                "Build-time Reddit API defaults restored"
+                "Reddit API settings cleared"
             } else {
                 "Reddit API settings are already active"
             }
@@ -846,7 +936,7 @@ class OtterViewModel @JvmOverloads constructor(
                         else -> RedditConnectionState.SignedOut
                     }
                     _message.value = if (resetToBuildDefaults) {
-                        "Build-time Reddit API defaults restored"
+                        "Reddit API settings cleared"
                     } else {
                         "Reddit API settings saved"
                     }
@@ -1042,6 +1132,11 @@ class OtterViewModel @JvmOverloads constructor(
             _refreshing.value = false
             result.onSuccess {
                 _connectionState.value = RedditConnectionState.Connected
+                // A completed refresh is a fresh listing, so whatever was concluded about
+                // further pages while it was in flight no longer applies. Without this, a
+                // load-more that raced the refresh could leave paging switched off for a feed
+                // that has plenty more to give.
+                feedHasMorePages = true
                 cacheCurrentFeed()
                 MediaCache.prefetch(
                     getApplication(),
@@ -1100,18 +1195,49 @@ class OtterViewModel @JvmOverloads constructor(
 
     fun showComposer() {
         if (repository.accountState.value is RedditAccountState.SignedIn) {
+            seedComposerCommunity()
             _composerVisible.value = true
         } else {
             _message.value = "Connect your Reddit account before creating a post"
         }
     }
 
+    /**
+     * Points a fresh composer at the community being browsed, which is where the compose button
+     * pressed inside a community almost always means to post.
+     *
+     * An unfinished draft keeps the destination it was written for: the community is part of what
+     * was drafted, so retargeting it would quietly redirect a post someone had already started.
+     */
+    private fun seedComposerCommunity() {
+        val community = composerCommunity ?: return
+        val draft = _postDraft.value
+        if (draft.title.isNotBlank() || draft.body.isNotBlank() || draft.linkUrl.isNotBlank()) return
+        if (draft.community.equals(community, ignoreCase = true)) return
+        updatePostDraft(draft.copy(community = community))
+    }
+
+    /**
+     * The community a new post should default to, as an `r/` path. Covers a community's own feed
+     * and a search scoped to one. Null on Home, Saved, user feeds and site-wide search, where
+     * there is no community to infer and the composer falls back to the subscription list.
+     */
+    private val composerCommunity: String?
+        get() {
+            val feed = _selectedFeed.value
+            val name = when {
+                feed.startsWith("r/", ignoreCase = true) -> feed.drop(2)
+                feed.startsWith("qr/", ignoreCase = true) -> feed.drop(3).substringBefore('/')
+                else -> null
+            }
+            return name?.takeIf(String::isNotEmpty)?.let { "r/$it" }
+        }
+
     fun hideComposer() {
         _composerVisible.value = false
     }
 
-    fun updatePostDraft(title: String, body: String, community: String) {
-        val draft = PostDraft(title, body, community)
+    fun updatePostDraft(draft: PostDraft) {
         _postDraft.value = draft
         if (!usesRepositoryOverride) {
             viewModelScope.launch(Dispatchers.IO) {
@@ -1120,17 +1246,25 @@ class OtterViewModel @JvmOverloads constructor(
         }
     }
 
-    fun submitPost(title: String, body: String, community: String) {
-        if (title.isBlank()) return
+    fun submitPost(draft: PostDraft) {
+        if (draft.title.isBlank()) return
         if (repository.accountState.value !is RedditAccountState.SignedIn) {
             _message.value = "Connect your Reddit account before creating a post"
             return
         }
+        // Caught here rather than at the API, where a missing or unusable address comes back as a
+        // generic Reddit failure that says nothing about which field is at fault.
+        if (draft.kind == SubmissionKind.LINK && normalizeSubmissionUrl(draft.linkUrl) == null) {
+            _message.value = "A link post needs a web address"
+            return
+        }
         viewModelScope.launch {
             repository.publishPost(
-                communityName = community.removePrefix("r/"),
-                title = title.trim(),
-                body = body.trim(),
+                communityName = draft.community.removePrefix("r/"),
+                title = draft.title.trim(),
+                body = draft.body.trim(),
+                kind = draft.kind,
+                linkUrl = draft.linkUrl,
             ).onSuccess {
                 _selectedFeed.value = "Home"
                 _composerVisible.value = false
@@ -1293,14 +1427,46 @@ class OtterViewModel @JvmOverloads constructor(
             assets = media.assets,
             startIndex = index,
         )
+        val generation = ++mediaViewerGeneration
+        // Opens on Reddit's silent preview straight away and upgrades in place once RedGifs
+        // answers. Waiting for the network before showing anything would make every one of
+        // these posts feel slower in exchange for a second or two of missing audio.
+        //
+        // Single-asset posts only: a gallery is not a RedGifs link, and swapping its contents
+        // for one file would throw away the pages either side of the one being viewed.
+        if (media.assets.size == 1) {
+            resolveRedGifs(post.destinationUrl, generation) { resolved ->
+                val current = _mediaViewer.value ?: return@resolveRedGifs
+                _mediaViewer.value = current.copy(assets = listOf(resolved), startIndex = 0)
+            }
+        }
     }
 
     /** Opens a single media URL — a GIF or clip linked from a comment — in the same viewer. */
     fun openMediaLink(url: String, title: String) {
+        // A RedGifs link points at a web page, which no player can open. Here there is nothing
+        // to show in the meantime, so this one waits for the real file rather than opening a
+        // viewer that could only fail.
+        if (RedGifsClient.idFrom(url) != null) {
+            val generation = ++mediaViewerGeneration
+            resolveRedGifs(url, generation) { resolved ->
+                _mediaViewer.value = MediaViewerRequest(title = title, assets = listOf(resolved))
+            }
+            return
+        }
+        // A `v.redd.it` address is a web page; the streams live underneath it at fixed names.
+        RedditVideoLinks.asset(url)?.let { asset ->
+            _mediaViewer.value = MediaViewerRequest(title = title, assets = listOf(asset))
+            return
+        }
         val path = url.substringBefore('?').lowercase()
         val kind = when {
-            path.endsWith(".gif") -> MediaKind.ANIMATED
+            path.endsWith(".gif") || path.endsWith(".gifv") -> MediaKind.ANIMATED
             path.endsWith(".mp4") || path.endsWith(".webm") -> MediaKind.ANIMATED
+            // A still handed to a player renders nothing and reports a playback failure, so
+            // anything that looks like an image has to be recognised before the video default.
+            LINK_IMAGE_SUFFIXES.any(path::endsWith) -> MediaKind.IMAGE
+            LINK_IMAGE_HOSTS.any(path::contains) -> MediaKind.IMAGE
             else -> MediaKind.VIDEO
         }
         _mediaViewer.value = MediaViewerRequest(
@@ -1309,13 +1475,93 @@ class OtterViewModel @JvmOverloads constructor(
         )
     }
 
+    /**
+     * Writes the harvested pool down so the next launch does not have to search for it again.
+     *
+     * Harvesting is a round of searches against Reddit, and it was being paid once per process.
+     * The set of communities it finds barely changes, so it belongs on disk next to everything
+     * else this app keeps between launches.
+     */
+    private fun persistAdultPool() {
+        if (usesRepositoryOverride) return
+        val names = repository.randomCommunityPoolSnapshot()
+        if (names.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            offlineCache.putDraft(ADULT_POOL_KEY, encodeCommunityNames(names))
+        }
+    }
+
+    private fun encodeCommunityNames(names: List<String>): String =
+        JSONArray().apply { names.forEach(::put) }.toString()
+
+    private fun decodeCommunityNames(value: String): List<String> = runCatching {
+        val array = JSONArray(value)
+        (0 until array.length()).mapNotNull { index ->
+            array.optString(index).takeIf(String::isNotBlank)
+        }
+    }.getOrDefault(emptyList())
+
     private fun markPostRead(postId: String) {
         repository.markRead(postId)
         if (readPostStore.add(postId)) _readPostIds.value = readPostStore.ids()
     }
 
+    /**
+     * Writes the asset being viewed into the device gallery.
+     *
+     * The viewer stays where it is: a save is something done to what is on screen, not a reason
+     * to leave it. The snackbar is the whole of the feedback.
+     */
+    fun saveMedia(asset: MediaAsset) {
+        viewModelScope.launch {
+            _message.value = when (val result = MediaSaver.save(getApplication(), asset)) {
+                is MediaSaveResult.Saved -> "Saved to ${result.album}"
+                is MediaSaveResult.Failed -> result.reason
+            }
+        }
+    }
+
     fun closeMedia() {
+        // Anything still resolving belongs to a viewer that is no longer open.
+        mediaViewerGeneration++
         _mediaViewer.value = null
+    }
+
+    /**
+     * Looks up a RedGifs link and hands back the real file, if it is one and it resolves.
+     *
+     * [generation] guards against a slow answer landing in a viewer the reader has since closed
+     * or moved past: by the time the network replies the screen may be showing something else
+     * entirely, and replacing its contents then would be worse than never resolving at all.
+     */
+    private fun prefetchRedGifs(sourceUrl: String?) {
+        if (usesRepositoryOverride) return
+        val url = sourceUrl ?: return
+        if (RedGifsClient.idFrom(url) == null) return
+        viewModelScope.launch { redGifs.prefetch(url) }
+    }
+
+    private fun resolveRedGifs(
+        sourceUrl: String?,
+        generation: Int,
+        onResolved: (MediaAsset) -> Unit,
+    ) {
+        if (usesRepositoryOverride) return
+        val url = sourceUrl ?: return
+        if (RedGifsClient.idFrom(url) == null) return
+        viewModelScope.launch {
+            val resolved = redGifs.resolve(url)
+            if (generation != mediaViewerGeneration) return@launch
+            if (resolved == null) {
+                // Silence beats a wrong screen: a post already shows Reddit's preview, and only
+                // a link has nothing at all to fall back to.
+                if (_mediaViewer.value == null) {
+                    _message.value = "Could not open that RedGifs link"
+                }
+                return@launch
+            }
+            onResolved(resolved)
+        }
     }
 
     fun clearMessage() {
@@ -1369,6 +1615,11 @@ class OtterViewModel @JvmOverloads constructor(
         const val MAX_ACTION_BAR_ITEMS = 5
         const val MAX_FILTERS_PER_KIND = 50
         const val POST_DRAFT_KEY = "new_post"
+        const val ADULT_POOL_KEY = "adult_community_pool"
+
+        /** Link targets the full-screen viewer should open as a still rather than a clip. */
+        val LINK_IMAGE_SUFFIXES = listOf(".jpg", ".jpeg", ".png", ".webp", ".avif", ".bmp")
+        val LINK_IMAGE_HOSTS = listOf("preview.redd.it", "i.redd.it", "i.imgur.com")
         val DEFAULT_FEED_ACTIONS = listOf(
             FeedAction.Search,
             FeedAction.Compose,
@@ -1470,6 +1721,8 @@ class OtterViewModel @JvmOverloads constructor(
         .put("title", value.title)
         .put("body", value.body)
         .put("community", value.community)
+        .put("kind", value.kind.name)
+        .put("linkUrl", value.linkUrl)
         .toString()
 
     private fun decodePostDraft(value: String): PostDraft? = runCatching {
@@ -1478,6 +1731,10 @@ class OtterViewModel @JvmOverloads constructor(
                 title = json.optString("title"),
                 body = json.optString("body"),
                 community = json.optString("community"),
+                // Drafts saved before link posts existed carry no kind, and a text post is what
+                // they were.
+                kind = enumValueOr(json.optString("kind"), SubmissionKind.TEXT),
+                linkUrl = json.optString("linkUrl"),
             )
         }
     }.getOrNull()

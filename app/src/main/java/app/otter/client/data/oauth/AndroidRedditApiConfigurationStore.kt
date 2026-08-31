@@ -7,7 +7,6 @@ import android.content.Context
 @SuppressLint("ApplySharedPref", "UseKtx") // A successful commit gates the live client swap.
 class AndroidRedditApiConfigurationStore(
     context: Context,
-    private val buildDefaults: RedditApiConfiguration,
 ) {
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
 
@@ -17,7 +16,7 @@ class AndroidRedditApiConfigurationStore(
             preferences.contains(KEY_REDIRECT_URI)
         if (!hasCompleteOverride) {
             if (preferences.all.isNotEmpty()) preferences.edit().clear().commit()
-            return defaults()
+            return emptyConfiguration()
         }
 
         val stored = runCatching {
@@ -30,7 +29,7 @@ class AndroidRedditApiConfigurationStore(
         if (stored?.isUsable == true) return stored
 
         preferences.edit().clear().commit()
-        return defaults()
+        return emptyConfiguration()
     }
 
     fun save(configuration: RedditApiConfiguration): Boolean {
@@ -45,7 +44,7 @@ class AndroidRedditApiConfigurationStore(
 
     fun reset(): Boolean = preferences.edit().clear().commit()
 
-    fun defaults(): RedditApiConfiguration = buildDefaults.normalized()
+    fun emptyConfiguration(): RedditApiConfiguration = RedditApiConfiguration()
 
     companion object {
         const val PREFERENCES_NAME = "reddit_api_configuration"

@@ -68,12 +68,14 @@ fun SearchScreen(
     query: String,
     suggestions: List<Community>,
     onQueryChange: (String) -> Unit,
-    onSearchPosts: (String) -> Unit,
+    onSearchPosts: (String, String?) -> Unit,
     onOpenCommunity: (String) -> Unit,
     onToggleSubscription: (Community) -> Unit,
     onOpenUser: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    /** The community being browsed when search was opened, if it was one. */
+    community: String? = null,
 ) {
     val colors = MaterialTheme.otterColors
     val focusRequester = remember { FocusRequester() }
@@ -142,7 +144,12 @@ fun SearchScreen(
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(
                                 onSearch = {
-                                    if (trimmed.isNotEmpty()) leaveWith { onSearchPosts(trimmed) }
+                                    // Enter takes the narrower reading, which is the one the
+                                    // reader is more likely to have meant from inside a
+                                    // community. The wider search is a row away.
+                                    if (trimmed.isNotEmpty()) {
+                                        leaveWith { onSearchPosts(trimmed, community) }
+                                    }
                                 },
                             ),
                             modifier = Modifier
@@ -188,10 +195,20 @@ fun SearchScreen(
                         .padding(horizontal = 12.dp, vertical = 6.dp),
                 ) {
                     Column {
+                        if (community != null) {
+                            SearchActionRow(
+                                icon = Icons.Outlined.Search,
+                                label = "Search r/$community for \"$trimmed\"",
+                            ) { leaveWith { onSearchPosts(trimmed, community) } }
+                            HorizontalDivider(
+                                color = colors.divider,
+                                modifier = Modifier.padding(start = 52.dp),
+                            )
+                        }
                         SearchActionRow(
                             icon = Icons.Outlined.Search,
                             label = "Search all posts for \"$trimmed\"",
-                        ) { leaveWith { onSearchPosts(trimmed) } }
+                        ) { leaveWith { onSearchPosts(trimmed, null) } }
                         HorizontalDivider(
                             color = colors.divider,
                             modifier = Modifier.padding(start = 52.dp),

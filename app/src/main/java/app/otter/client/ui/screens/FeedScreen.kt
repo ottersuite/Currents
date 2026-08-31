@@ -37,6 +37,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.BookmarkBorder
@@ -91,6 +94,10 @@ import app.otter.client.ui.components.ActionBarItem
 import app.otter.client.ui.components.compactNumber
 import app.otter.client.ui.components.FeedPost
 import app.otter.client.ui.components.GlassActionBar
+import androidx.compose.material.icons.outlined.KeyboardDoubleArrowUp
+import app.otter.client.ui.components.smoothScrollTo
+import app.otter.client.ui.components.RoundBarButton
+import app.otter.client.ui.components.BAR_EDGE_INSET
 import app.otter.client.ui.theme.otterColors
 import kotlinx.coroutines.launch
 import kotlin.math.max
@@ -114,6 +121,7 @@ fun FeedScreen(
     onOpenSearch: () -> Unit,
     onToggleSearch: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
+    onSubmitSearch: (String) -> Unit,
     onSortChange: (FeedSort) -> Unit,
     onTimeframeChange: (FeedTimeframe) -> Unit,
     onRefresh: () -> Unit,
@@ -139,7 +147,6 @@ fun FeedScreen(
     val statusBarHeight = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
     val navigationBarHeight = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
     val coroutineScope = rememberCoroutineScope()
-    val showJumpButton by remember { derivedStateOf { listState.firstVisibleItemIndex > 4 } }
     val filteredPosts = remember(
         posts,
         selectedFeed,
@@ -189,11 +196,6 @@ fun FeedScreen(
                 }
             }
             .toList()
-    }
-
-    LaunchedEffect(selectedFeed, sort, timeframe) {
-        // A restored feed keeps its place; a newly chosen one starts at the top.
-        if (scrollTarget == null) listState.scrollToItem(0)
     }
 
     LaunchedEffect(scrollTarget) {
@@ -347,32 +349,20 @@ fun FeedScreen(
             searchQuery = searchQuery,
             onToggleSearch = onToggleSearch,
             onSearchQueryChange = onSearchQueryChange,
+            onSubmitSearch = onSubmitSearch,
             onSortChange = onSortChange,
             onTimeframeChange = onTimeframeChange,
             modifier = Modifier.align(Alignment.TopCenter),
         )
 
-        if (showJumpButton) {
-            Surface(
-                color = colors.surfaceGlass,
-                shape = CircleShape,
-                shadowElevation = 8.dp,
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(end = 17.dp, bottom = 82.dp)
-                    .size(42.dp)
-                    .clickable {
-                        coroutineScope.launch { listState.animateScrollToItem(0) }
-                    },
-            ) {
-                Icon(
-                    Icons.Outlined.KeyboardArrowUp,
-                    contentDescription = "Jump to top",
-                    tint = colors.accent,
-                    modifier = Modifier.padding(9.dp),
-                )
-            }
+        // The same control the post screen puts here: same size, same icon, same corner, and
+        // the same scroll that animates only the arrival rather than the whole way up.
+        RoundBarButton(
+            icon = Icons.Outlined.KeyboardDoubleArrowUp,
+            contentDescription = "Jump to top",
+            modifier = Modifier.align(Alignment.BottomStart).padding(start = BAR_EDGE_INSET),
+        ) {
+            coroutineScope.launch { listState.smoothScrollTo(0) }
         }
 
         GlassActionBar(
@@ -488,7 +478,11 @@ private fun CommunityHeader(
 /** How many rows from the end to start the next page. */
 private const val LOAD_MORE_LEAD = 6
 
+
 private fun feedTitle(feedName: String): String = when {
+    feedName.startsWith("qr/") -> feedName.removePrefix("qr/").let { scoped ->
+        "${scoped.substringBefore('/')} · “${scoped.substringAfter('/', "")}”"
+    }
     feedName.startsWith("q/") -> "“${feedName.removePrefix("q/")}”"
     feedName.startsWith("u/") -> feedName
     feedName.startsWith("r/", ignoreCase = true) -> feedName.drop(2)
@@ -504,6 +498,7 @@ private fun FeedTopBar(
     searchQuery: String,
     onToggleSearch: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
+    onSubmitSearch: (String) -> Unit,
     onSortChange: (FeedSort) -> Unit,
     onTimeframeChange: (FeedTimeframe) -> Unit,
     modifier: Modifier = Modifier,
@@ -552,6 +547,13 @@ private fun FeedTopBar(
                         onValueChange = onSearchQueryChange,
                         singleLine = true,
                         textStyle = MaterialTheme.typography.bodyMedium.copy(color = colors.textPrimary),
+                        // Typing narrows what is already loaded, which is instant and is often
+                        // all that was wanted. Enter escalates the same words into a real search
+                        // of the feed itself, for the posts that were never loaded to filter.
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(
+                            onSearch = { searchQuery.trim().takeIf(String::isNotEmpty)?.let(onSubmitSearch) },
+                        ),
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }

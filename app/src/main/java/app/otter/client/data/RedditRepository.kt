@@ -5,6 +5,7 @@ import app.otter.client.model.Community
 import app.otter.client.model.Post
 import app.otter.client.model.RedditAccount
 import app.otter.client.model.RedditAccountState
+import app.otter.client.model.SubmissionKind
 import app.otter.client.model.VoteState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,7 +32,13 @@ interface RedditRepository {
 
     fun comments(postId: String): StateFlow<List<Comment>>
 
-    fun submitPost(communityName: String, title: String, body: String): Post
+    fun submitPost(
+        communityName: String,
+        title: String,
+        body: String,
+        kind: SubmissionKind = SubmissionKind.TEXT,
+        linkUrl: String = "",
+    ): Post
 
     fun submitComment(postId: String, parentId: String?, body: String): Comment
 
@@ -59,6 +66,17 @@ interface RedditRepository {
      */
     suspend fun randomNsfwCommunity(): Result<String> =
         Result.failure(IllegalStateException("Connect your Reddit account to browse communities"))
+
+    /**
+     * Restores a previously harvested pool of communities to draw random picks from.
+     *
+     * Finding candidates costs a round of searches. Handing back a pool kept from an earlier run
+     * is what turns the random button from "search, then load" into just a load.
+     */
+    fun seedRandomCommunityPool(names: List<String>, harvestedAtMillis: Long) = Unit
+
+    /** The current pool, for the caller to store. Empty when nothing has been harvested. */
+    fun randomCommunityPoolSnapshot(): List<String> = emptyList()
 
     /** Publishes a previously loaded feed as-is. Used to return to a feed without refetching. */
     fun restoreFeed(posts: List<Post>) = Unit
@@ -112,6 +130,15 @@ interface RedditRepository {
 
     suspend fun disconnectAccount(): Result<Unit> = Result.success(Unit)
 
+    /**
+     * Obtains an access token before anything needs one.
+     *
+     * Called at startup so the token wait overlaps the rest of launch instead of sitting in
+     * front of the first feed request. Failure is not worth reporting: whatever needed the token
+     * will try again and surface its own error.
+     */
+    suspend fun warmAccountSession(): Result<Unit> = Result.success(Unit)
+
     /** Retries any sign-out whose token revocation could not reach Reddit at the time. */
     suspend fun retryPendingAccountRevocations(): Result<Unit> = Result.success(Unit)
 
@@ -145,8 +172,13 @@ interface RedditRepository {
     suspend fun setCommunitySubscription(communityName: String, subscribed: Boolean): Result<Unit> =
         Result.failure(IllegalStateException("Reddit subscriptions are unavailable"))
 
-    suspend fun publishPost(communityName: String, title: String, body: String): Result<Unit> =
-        runCatching { submitPost(communityName, title, body) }.map { }
+    suspend fun publishPost(
+        communityName: String,
+        title: String,
+        body: String,
+        kind: SubmissionKind = SubmissionKind.TEXT,
+        linkUrl: String = "",
+    ): Result<Unit> = runCatching { submitPost(communityName, title, body, kind, linkUrl) }.map { }
 
     suspend fun publishComment(postId: String, parentId: String?, body: String): Result<Unit> =
         runCatching { submitComment(postId, parentId, body) }.map { }

@@ -14,6 +14,13 @@ data class Comment(
     val score: Int,
     val createdAtEpochSeconds: Long,
     val voteState: VoteState = VoteState.NONE,
+    /**
+     * The author's flair in this community, when they have one.
+     *
+     * Set by the subreddit rather than by the author, so it carries the context a comment is
+     * being made in — a flair reading "Cardiologist" changes how its comment is read.
+     */
+    val authorFlair: String? = null,
     val isSubmitter: Boolean = false,
     val isDistinguished: Boolean = false,
     val isEdited: Boolean = false,

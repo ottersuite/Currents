@@ -10,11 +10,15 @@ import app.otter.client.model.Community
 import app.otter.client.model.Post
 import app.otter.client.model.PostPreview
 import app.otter.client.model.PostType
+import app.otter.client.model.SubmissionKind
 import app.otter.client.model.RedditAccount
 import app.otter.client.model.RedditAccountState
 import app.otter.client.model.RedditAuthenticationException
 import app.otter.client.model.VoteState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -77,6 +81,10 @@ class RedditApiRepository(
     override suspend fun completeAccountAuthorization(callbackUrl: String): Result<RedditAccount> =
         oauthManager.completeAuthorization(callbackUrl)
 
+    override suspend fun warmAccountSession(): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching { oauthManager.accessToken() }.map { }
+    }
+
     override suspend fun retryPendingAccountRevocations(): Result<Unit> =
         oauthManager.flushPendingRevocations()
 
@@ -97,9 +105,15 @@ class RedditApiRepository(
         return result
     }
 
-    override fun submitPost(communityName: String, title: String, body: String): Post =
+    override fun submitPost(
+        communityName: String,
+        title: String,
+        body: String,
+        kind: SubmissionKind,
+        linkUrl: String,
+    ): Post =
         synchronized(localStateLock) {
-            super.submitPost(communityName, title, body).also { post ->
+            super.submitPost(communityName, title, body, kind, linkUrl).also { post ->
                 localPostDrafts[post.id] = post
                 rememberPostSnapshot(post)
             }
@@ -324,23 +338,34 @@ class RedditApiRepository(
         communityName: String,
         title: String,
         body: String,
+        kind: SubmissionKind,
+        linkUrl: String,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val community = communityName.trim().removePrefix("r/")
             require(community.isNotEmpty()) { "Community name cannot be blank" }
             require(title.isNotBlank()) { "Post title cannot be blank" }
+            val form = FormBody.Builder()
+                .add("api_type", "json")
+                .add("kind", kind.formValue)
+                .add("sr", community)
+                .add("title", title.trim())
+                .add("raw_json", "1")
+                .add("resubmit", "true")
+                .add("sendreplies", "true")
+            // Reddit reads `text` only for a self post and `url` only for a link post, and
+            // rejects the submission outright if the field its kind needs is missing.
+            when (kind) {
+                SubmissionKind.TEXT -> form.add("text", body.trim())
+                SubmissionKind.LINK -> {
+                    val url = normalizeSubmissionUrl(linkUrl)
+                    requireNotNull(url) { "A link post needs a web address" }
+                    form.add("url", url)
+                }
+            }
             authorizedPost(
                 path = "/api/submit",
-                body = FormBody.Builder()
-                    .add("api_type", "json")
-                    .add("kind", "self")
-                    .add("sr", community)
-                    .add("title", title.trim())
-                    .add("text", body.trim())
-                    .add("raw_json", "1")
-                    .add("resubmit", "true")
-                    .add("sendreplies", "true")
-                    .build(),
+                body = form.build(),
                 retryOnUnauthorized = false,
             )
             Unit
@@ -444,9 +469,19 @@ class RedditApiRepository(
             val (key, cursor, alreadyLoaded) = synchronized(localStateLock) {
                 Triple(paginationKey, afterCursor, loadedPostCount)
             }
-            // A cursor only means anything for the listing it came from, and Reddit signals the
-            // end of a listing by returning no cursor at all.
-            if (cursor.isNullOrBlank() || key != pageKey(feedName, sort, timeframe)) {
+            // A cursor only means anything for the listing it came from. When it belongs to a
+            // different one, this feed simply has not had its first page yet -- the refresh is
+            // still in flight -- and nothing is known about whether further pages exist.
+            //
+            // That is not the same as being finished, and the difference matters: the caller
+            // latches a false as "this listing is exhausted" and stops asking for the rest of
+            // the visit. Reaching the bottom of a restored feed before its refresh lands is
+            // exactly how a community used to end up unable to page at all.
+            if (key != pageKey(feedName, sort, timeframe)) {
+                return@runCatching true
+            }
+            // Reddit signals the real end of a listing by returning no cursor at all.
+            if (cursor.isNullOrBlank()) {
                 return@runCatching false
             }
 
@@ -479,9 +514,26 @@ class RedditApiRepository(
         timeframe: String?,
         username: String,
     ): String = if (feedName.equals("Saved", ignoreCase = true)) {
-        "https://oauth.reddit.com/user/$username/saved?limit=50&raw_json=1"
+        "https://oauth.reddit.com/user/$username/saved?limit=$FEED_PAGE_LIMIT&raw_json=1"
     } else {
         listingUrl(feedName, sort, timeframe)
+    }
+
+    /**
+     * The author's flair, from whichever of the two shapes Reddit used.
+     *
+     * `author_flair_text` is the plain form. A flair built from the richtext editor arrives as a
+     * list of fragments instead, where only the text ones carry anything a label can show — the
+     * rest are emoji references, which this has no way to render.
+     */
+    private fun JSONObject.authorFlair(): String? {
+        nullableString("author_flair_text")?.trim()?.takeIf(String::isNotEmpty)?.let { return it }
+        val fragments = optJSONArray("author_flair_richtext") ?: return null
+        return (0 until fragments.length())
+            .mapNotNull { index -> fragments.optJSONObject(index)?.nullableString("t") }
+            .joinToString(" ")
+            .trim()
+            .takeIf(String::isNotEmpty)
     }
 
     private fun pageKey(feedName: String, sort: String, timeframe: String?): String =
@@ -500,8 +552,14 @@ class RedditApiRepository(
                 val token = oauthManager.accessToken()
                 val normalizedSort = sort.lowercase(Locale.ROOT)
                     .let { if (it == "best") "confidence" else it }
+                // Sized for the first screen, not the whole thread. A 200-comment, 12-deep
+                // response is a large download and a large parse before a single row can be
+                // drawn, and almost none of it is on screen when the post opens. Truncated
+                // branches come back as "load more" rows, which already exist.
                 val json = authorizedGet(
-                    "https://oauth.reddit.com/comments/$postId?limit=200&depth=12&sort=$normalizedSort&raw_json=1",
+                    "https://oauth.reddit.com/comments/$postId" +
+                        "?limit=$COMMENT_PAGE_LIMIT&depth=$COMMENT_PAGE_DEPTH" +
+                        "&sort=$normalizedSort&raw_json=1",
                     token,
                 )
                 if (!isCurrentContentSession(requestSessionGeneration)) return@runCatching
@@ -613,6 +671,12 @@ class RedditApiRepository(
 
     private fun LocalPostFlags?.orEmpty(): LocalPostFlags = this ?: LocalPostFlags()
 
+    override fun seedRandomCommunityPool(names: List<String>, harvestedAtMillis: Long) {
+        nsfwPool.fill(names, harvestedAtMillis)
+    }
+
+    override fun randomCommunityPoolSnapshot(): List<String> = nsfwPool.snapshot()
+
     override suspend fun randomNsfwCommunity(): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             // A cached pool turns the second and later taps into no network call at all: the
@@ -629,27 +693,114 @@ class RedditApiRepository(
      * Builds the pool to draw from: communities Reddit knows about, not ones already followed.
      *
      * The point of the button is to land somewhere new, so subscriptions are deliberately not
-     * consulted. The subscriber floor is what keeps the results recognisable — searching for the
-     * word "nsfw" otherwise surfaces the long tail of communities that describe themselves that
-     * way rather than the ones anyone has heard of.
+     * consulted. Every seed contributes and each is followed past its first page, because one
+     * relevance-ranked page is a few dozen communities once the floor has taken its cut — a bag
+     * that small is why the button kept returning to the same handful.
+     *
+     * The harvest runs in two rounds because this endpoint matches names and descriptions, so a
+     * fixed word list can only ever reach communities that describe themselves in those words.
+     * Round two searches for the names round one found: adult communities cross-reference each
+     * other constantly, so their own names are the queries that reach their neighbours — and
+     * that keeps working as the communities Reddit surfaces change, which a word list does not.
+     *
+     * Searches run together within a round, so the cost is roughly two round trips rather than
+     * twenty. It is paid on the first tap and then once per pool lifetime.
      */
-    private suspend fun buildAdultPool(token: RedditAccessToken): List<String> =
-        NSFW_SEED_QUERIES.shuffled().firstNotNullOfOrNull { seed ->
-            runCatching {
-                adultCommunities(
-                    JSONObject(
-                        authorizedGet(
-                            "https://oauth.reddit.com/subreddits/search" +
-                                "?q=${seed.urlEncoded()}&limit=100&include_over_18=on" +
-                                "&sort=relevance&raw_json=1",
-                            token,
-                        ),
+    private suspend fun buildAdultPool(token: RedditAccessToken): List<String> = coroutineScope {
+        val firstRound = NSFW_SEED_QUERIES
+            .map { seed -> async { adultSeedResults(seed, token) } }
+            .awaitAll()
+            .flatten()
+
+        // Sampled rather than taken from the top: the largest communities are the aggregators,
+        // and their neighbours are the ones round one already found. Mid-sized names are what
+        // reach a corner of the space the word list never named.
+        val crossReferences = firstRound
+            .filter { it.second >= FALLBACK_RANDOM_SUBSCRIBERS }
+            .map { it.first }
+            .distinct()
+            .shuffled()
+            .take(CROSS_REFERENCE_SEEDS)
+            .map { seed -> async { adultSeedResults(seed, token, pages = 1) } }
+            .awaitAll()
+            .flatten()
+
+        // Seeds overlap heavily, so the same community arrives several times over. Keyed on a
+        // folded name, the first sighting wins and keeps the casing Reddit displays it with.
+        val candidates = linkedMapOf<String, Pair<String, Int>>()
+        (firstRound + crossReferences).forEach { candidate ->
+            candidates.getOrPut(candidate.first.lowercase(Locale.ROOT)) { candidate }
+        }
+        if (BuildConfig.DEBUG) {
+            // Round two costs a second wait, so it should be visible whether it earns one.
+            val fromSeeds = firstRound.map { it.first.lowercase(Locale.ROOT) }.distinct().size
+            android.util.Log.d(
+                "OtterApi",
+                "adult harvest: $fromSeeds from seeds, " +
+                    "${candidates.size - fromSeeds} more from cross-references",
+            )
+        }
+        rankedAdultPool(candidates.values)
+    }
+
+    /** Walks one seed's search results, following Reddit's cursor until the pages run out. */
+    private suspend fun adultSeedResults(
+        seed: String,
+        token: RedditAccessToken,
+        pages: Int = ADULT_POOL_PAGES,
+    ): List<Pair<String, Int>> {
+        val results = mutableListOf<Pair<String, Int>>()
+        var after: String? = null
+        repeat(pages) {
+            currentCoroutineContext().ensureActive()
+            val cursor = after?.let { "&after=${it.urlEncoded()}" }.orEmpty()
+            val payload = runCatching {
+                JSONObject(
+                    authorizedGet(
+                        "https://oauth.reddit.com/subreddits/search" +
+                            "?q=${seed.urlEncoded()}&limit=100&include_over_18=on" +
+                            "&sort=relevance&raw_json=1$cursor",
+                        token,
                     ),
                 )
-            }.getOrNull()?.takeIf { it.isNotEmpty() }
-        }.orEmpty()
+            }.getOrNull() ?: return results
 
-    private fun adultCommunities(payload: JSONObject): List<String> {
+            results += adultCommunities(payload)
+            after = payload.optJSONObject("data")?.nullableString("after") ?: return results
+        }
+        return results
+    }
+
+    /**
+     * Prefers communities anyone would recognise, but does not insist on it.
+     *
+     * The high floor is what keeps a draw from landing on a community of four hundred people.
+     * Applying it to a thin harvest is the other half of what made the button repeat, so it
+     * holds only while it can still fill a deck worth dealing.
+     */
+    private fun rankedAdultPool(candidates: Collection<Pair<String, Int>>): List<String> {
+        fun namesAbove(floor: Int) = candidates.filter { it.second >= floor }.map { it.first }
+
+        val preferred = namesAbove(MIN_RANDOM_SUBSCRIBERS)
+        val chosen = if (preferred.size >= MIN_RANDOM_POOL) {
+            preferred
+        } else {
+            namesAbove(FALLBACK_RANDOM_SUBSCRIBERS).ifEmpty { preferred }
+        }
+        if (BuildConfig.DEBUG) {
+            // The floors are a judgement about how active a community is; this is the only way
+            // to check that judgement against what Reddit actually returns.
+            android.util.Log.d(
+                "OtterApi",
+                "adult pool: ${candidates.size} found, " +
+                    "${preferred.size} over $MIN_RANDOM_SUBSCRIBERS, " +
+                    "dealing ${chosen.size}",
+            )
+        }
+        return chosen
+    }
+
+    private fun adultCommunities(payload: JSONObject): List<Pair<String, Int>> {
         val children = payload.optJSONObject("data")?.optJSONArray("children") ?: return emptyList()
         return (0 until children.length()).mapNotNull { index ->
             val data = children.optJSONObject(index)?.optJSONObject("data") ?: return@mapNotNull null
@@ -657,9 +808,12 @@ class RedditApiRepository(
             // Public only: a private or restricted community would load into an error page.
             val reachable = data.nullableString("subreddit_type")
                 ?.equals("public", ignoreCase = true) != false
-            val known = data.optInt("subscribers") >= MIN_RANDOM_SUBSCRIBERS
-            name.takeIf { data.optBoolean("over18") && reachable && known }
-        }.distinct()
+            // Quarantined communities are still typed public but answer 403 until the account
+            // has opted into them on the web, so landing on one is the same dead end.
+            val gated = data.optBoolean("quarantine")
+            if (!data.optBoolean("over18") || !reachable || gated) return@mapNotNull null
+            name to data.optInt("subscribers").coerceAtLeast(0)
+        }
     }
 
     override suspend fun searchCommunities(query: String, limit: Int): Result<List<Community>> =
@@ -801,25 +955,38 @@ class RedditApiRepository(
         val communitySort = if (sort == "best") "hot" else sort
         val window = timeframe?.let { "&t=$it" }.orEmpty()
         val base = "https://oauth.reddit.com"
+        // Search has its own sort vocabulary; the feed's sort is mapped onto it.
+        val searchSort = when (sort) {
+            "best" -> "relevance"
+            "rising" -> "hot"
+            else -> sort
+        }
 
         return when {
+            // A search confined to one community. The name cannot contain a slash, so the first
+            // one separates it from a query that may well contain several.
+            feedName.startsWith(COMMUNITY_SEARCH_PREFIX, ignoreCase = true) -> {
+                val scoped = feedName.substring(COMMUNITY_SEARCH_PREFIX.length)
+                val community = scoped.substringBefore('/')
+                val query = scoped.substringAfter('/', "")
+                "$base/r/${community.urlEncoded()}/search?q=${query.urlEncoded()}" +
+                    "&restrict_sr=1&type=link&sort=$searchSort" +
+                    "&include_over_18=on&limit=$FEED_PAGE_LIMIT&raw_json=1" +
+                    (window.ifEmpty { "&t=all" })
+            }
+
             feedName.startsWith(SEARCH_FEED_PREFIX, ignoreCase = true) -> {
                 val query = feedName.substring(SEARCH_FEED_PREFIX.length)
-                // Search has its own sort vocabulary; the feed's sort is mapped onto it.
-                val searchSort = when (sort) {
-                    "best" -> "relevance"
-                    "rising" -> "hot"
-                    else -> sort
-                }
                 "$base/search?q=${query.urlEncoded()}&type=link&sort=$searchSort" +
-                    "&include_over_18=on&limit=50&raw_json=1" +
+                    "&include_over_18=on&limit=$FEED_PAGE_LIMIT&raw_json=1" +
                     (window.ifEmpty { "&t=all" })
             }
 
             feedName.startsWith(USER_FEED_PREFIX, ignoreCase = true) -> {
                 val user = feedName.substring(USER_FEED_PREFIX.length)
                 "$base/user/${user.urlEncoded()}/submitted" +
-                    "?sort=${if (sort == "best") "new" else sort}&limit=50&raw_json=1$window"
+                    "?sort=${if (sort == "best") "new" else sort}" +
+                        "&limit=$FEED_PAGE_LIMIT&raw_json=1$window"
             }
 
             else -> {
@@ -832,7 +999,7 @@ class RedditApiRepository(
                         "/${feedName.lowercase(Locale.ROOT)}/$communitySort"
                     else -> "/best"
                 }
-                "$base$path?limit=50&raw_json=1$window"
+                "$base$path?limit=$FEED_PAGE_LIMIT&raw_json=1$window"
             }
         }
     }
@@ -857,6 +1024,11 @@ class RedditApiRepository(
                 add(
                     generated.copy(
                         displayName = data.nullableString("title") ?: generated.displayName,
+                        // `community_icon` is the styled one a subreddit picks; `icon_img` is
+                        // the older square. Either can be present, empty, or absent.
+                        iconUrl = data.nullableString("community_icon")
+                            ?.substringBefore('?')
+                            ?: data.nullableString("icon_img")?.substringBefore('?'),
                         memberCount = data.optLong("subscribers")
                             .coerceIn(0L, Int.MAX_VALUE.toLong())
                             .toInt(),
@@ -961,6 +1133,12 @@ class RedditApiRepository(
             )
         }
 
+        // A gallery usually carries no `preview` block at all: its images live in
+        // `media_metadata`, each with its own resolution ladder. Without reading that, a gallery
+        // fell through to `thumbnail` below -- a ~140px square, which a full-bleed card then
+        // scaled across the whole screen. That is the blur, not the decoder.
+        galleryPreview(data)?.let { return it }
+
         val thumbnail = data.nullableString("thumbnail")?.decodeRedditUrl().orEmpty()
         if (thumbnail.startsWith("https://")) {
             return PreviewImage(thumbnail, thumbnail, thumbnail, 4f / 3f)
@@ -973,6 +1151,40 @@ class RedditApiRepository(
         return null
     }
 
+
+    /** The first usable image of a gallery, at the sizes the feed actually draws it. */
+    private fun galleryPreview(data: JSONObject): PreviewImage? {
+        val items = data.optJSONObject("gallery_data")?.optJSONArray("items") ?: return null
+        val metadata = data.optJSONObject("media_metadata") ?: return null
+        // Reddit leaves removed or still-processing items in the list; the card should lead with
+        // the first one that has something to show rather than with a hole.
+        val entry = (0 until items.length()).firstNotNullOfOrNull { index ->
+            items.optJSONObject(index)
+                ?.nullableString("media_id")
+                ?.let(metadata::optJSONObject)
+                ?.takeIf { it.nullableString("status")?.equals("valid", ignoreCase = true) != false }
+        } ?: return null
+
+        val source = entry.optJSONObject("s")
+        // An animated item stores `gif`/`mp4` under `s` and no still at all, so the ladder is
+        // the only place a frame to show exists.
+        val full = source?.nullableString("u")?.decodeRedditUrl()?.takeIf { it.startsWith("https://") }
+            ?: RedditPreviewSizes.largestGalleryCopy(entry)
+            ?: return null
+        val width = source?.optInt("x", 0) ?: 0
+        val height = source?.optInt("y", 0) ?: 0
+
+        return PreviewImage(
+            url = full,
+            thumbnailUrl = RedditPreviewSizes.galleryCopyCovering(entry, THUMBNAIL_TARGET_WIDTH),
+            cardImageUrl = RedditPreviewSizes.galleryCopyCovering(entry, CARD_TARGET_WIDTH),
+            aspectRatio = if (width > 0 && height > 0) {
+                (width.toFloat() / height).coerceIn(.7f, 2.2f)
+            } else {
+                4f / 3f
+            },
+        )
+    }
 
     /**
      * Reddit truncates deep or long threads and leaves a `more` marker where the rest belongs.
@@ -1090,6 +1302,7 @@ class RedditApiRepository(
                         score = data.optInt("score"),
                         createdAtEpochSeconds = data.optLong("created_utc").coerceAtLeast(0L),
                         voteState = voteState,
+                        authorFlair = data.authorFlair(),
                         isSubmitter = data.optBoolean("is_submitter"),
                         isDistinguished = data.nullableString("distinguished") != null,
                         isEdited = data.opt("edited")
@@ -1135,6 +1348,7 @@ class RedditApiRepository(
                 score = data.optInt("score"),
                 createdAtEpochSeconds = data.optLong("created_utc").coerceAtLeast(0L),
                 voteState = voteState,
+                authorFlair = data.authorFlair(),
                 isSubmitter = data.optBoolean("is_submitter"),
                 isDistinguished = data.nullableString("distinguished") != null,
                 isEdited = data.opt("edited").let { it != null && it !== JSONObject.NULL && it != false },
@@ -1177,11 +1391,42 @@ class RedditApiRepository(
     }
 
     private companion object {
-        /** Big enough to be broadly known, which is what keeps the draw from feeling random. */
-        const val MIN_RANDOM_SUBSCRIBERS = 100_000
+        /** Posts per listing request. Reddit caps this at 100. */
+        const val FEED_PAGE_LIMIT = 75
+
+        /**
+         * How much of a thread the first request asks for; the rest expands on demand.
+         *
+         * A balance rather than a maximum. The original 200/12 was a large download and a large
+         * parse before a single comment could be drawn; 60/8 was quick but ran out too early on
+         * a busy post. Truncated branches still come back as "load more" rows.
+         */
+        const val COMMENT_PAGE_LIMIT = 120
+        const val COMMENT_PAGE_DEPTH = 10
+
+        /**
+         * The floor's job is to skip communities that are effectively dead — a handful of posts
+         * a year, nothing loaded when you arrive — not to keep the draw famous. Set too high it
+         * works against the button: the largest adult communities are the aggregators everyone
+         * has already seen, so a strict floor makes "random" land on the familiar. Activity is
+         * what matters and subscriber count is the only proxy the search endpoint offers.
+         */
+        const val MIN_RANDOM_SUBSCRIBERS = 25_000
+
+        /** Relaxed floor, used only when the preferred one cannot fill a deck. */
+        const val FALLBACK_RANDOM_SUBSCRIBERS = 5_000
+
+        /** Below this the deal comes back around fast enough to notice. */
+        const val MIN_RANDOM_POOL = 40
+
+        /** Two pages a seed: past that, relevance ranking has stopped being about the seed. */
+        const val ADULT_POOL_PAGES = 2
         const val MORE_CHILDREN_BATCH = 100
         const val SUBSCRIPTION_TTL_MS = 15 * 60 * 1000L
         const val SEARCH_FEED_PREFIX = "q/"
+
+        /** `qr/<community>/<query>` — a search restricted to one community. */
+        const val COMMUNITY_SEARCH_PREFIX = "qr/"
         const val USER_FEED_PREFIX = "u/"
         /** Wide enough for a list thumbnail on a dense screen, far short of a full-size image. */
         const val THUMBNAIL_TARGET_WIDTH = 320
@@ -1189,8 +1434,30 @@ class RedditApiRepository(
         /** Reddit's preview ladder tops out at 1080, so this takes the widest rung it offers. */
         const val CARD_TARGET_WIDTH = 1080
 
-        /** Broad seeds; Reddit's own relevance ranking supplies the variety within each. */
-        val NSFW_SEED_QUERIES = listOf("nsfw", "adult", "over18", "porn")
+        /**
+         * Round-one queries.
+         *
+         * Each word finds a different slice rather than a different ranking of one slice, since
+         * the endpoint matches names and descriptions: a community calling itself "amateur" and
+         * one calling itself "cosplay" do not turn up in each other's results. Four generic
+         * words returned four orderings of the same corner of Reddit.
+         *
+         * Terms that would bias the crawl toward content sexualising minors are deliberately
+         * absent and should stay absent — the omission is the filter, and adding one back to
+         * "widen the pool" would defeat it.
+         */
+        val NSFW_SEED_QUERIES = listOf(
+            "nsfw",
+            "adult",
+            "over18",
+            "porn",
+            "gonewild",
+            "amateur",
+            "cosplay",
+        )
+
+        /** How many of round one's communities are searched for in round two. */
+        const val CROSS_REFERENCE_SEEDS = 6
 
         val COMMUNITY_PALETTE = listOf(
             0xFF4EA7F5L to 0xFF154A72L,

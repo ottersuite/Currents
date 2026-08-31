@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
             AuthTabIntent.RESULT_CANCELED ->
                 otterViewModel.cancelRedditSignIn("Reddit sign-in was cancelled")
             AuthTabIntent.RESULT_VERIFICATION_FAILED ->
-                otterViewModel.cancelRedditSignIn("The HTTPS callback domain is not verified for Otter")
+                otterViewModel.cancelRedditSignIn("The HTTPS callback domain is not verified for Currents")
             AuthTabIntent.RESULT_VERIFICATION_TIMED_OUT ->
                 otterViewModel.cancelRedditSignIn("The HTTPS callback domain verification timed out")
             else -> otterViewModel.cancelRedditSignIn("The browser could not complete Reddit sign-in")
@@ -99,7 +99,7 @@ class MainActivity : ComponentActivity() {
                     ),
                 )
             }.onFailure {
-                otterViewModel.cancelRedditSignIn("Otter could not open the in-app sign-in page")
+                otterViewModel.cancelRedditSignIn("Currents could not open the in-app sign-in page")
             }
             return
         }

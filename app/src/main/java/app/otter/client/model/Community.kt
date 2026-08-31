@@ -13,6 +13,14 @@ data class Community(
     val isFavorite: Boolean = false,
     val accentStartArgb: Long,
     val accentEndArgb: Long,
+    /**
+     * The community's own icon, when Reddit has one for it.
+     *
+     * Null is the normal case for a community first seen in a post, where the listing carries no
+     * styling. The accent colours above remain the fallback, so a missing icon is a plainer row
+     * rather than an empty one.
+     */
+    val iconUrl: String? = null,
 ) {
     init {
         require(name.isNotBlank()) { "Community name cannot be blank" }

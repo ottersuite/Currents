@@ -16,6 +16,7 @@ import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -220,6 +221,92 @@ class RedditApiRepositorySessionTest {
         // The spliced list is built from a pre-disconnect snapshot, so an unguarded write would
         // restore the whole thread -- not just the page that was in flight.
         assertTrue(comments.value.isEmpty())
+    }
+
+    @Test
+    fun loadingMoreBeforeTheFirstPageDoesNotReportTheListingExhausted() = runBlocking {
+        val repository = signedInRepository(
+            OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    error("Unexpected Reddit API request: ${chain.request().url}")
+                }
+                .build(),
+        )
+
+        // No refresh has run yet, so the stored cursor belongs to no listing at all. Reaching
+        // the bottom of a restored feed while its refresh is still in flight does exactly this.
+        val result = repository.loadMoreFeed(feedName = "r/pics", sort = "best", timeframe = null)
+
+        // True means "ask again", not "a page is waiting". Answering false here is what used to
+        // switch paging off for the rest of the visit, because the caller latches it.
+        assertEquals(true, result.getOrThrow())
+    }
+
+    @Test
+    fun authorFlairIsReadFromEitherShapeRedditSendsIt() = runBlocking {
+        val postId = "flair-post"
+        val repository = signedInRepository(
+            OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    jsonResponse(
+                        chain.request(),
+                        """
+                        [
+                          {"data": {"children": []}},
+                          {"data": {"children": [
+                            {"kind": "t1", "data": {
+                              "id": "plain", "body": "b", "author": "one", "created_utc": 1,
+                              "author_flair_text": "  Cardiologist  "
+                            }},
+                            {"kind": "t1", "data": {
+                              "id": "rich", "body": "b", "author": "two", "created_utc": 1,
+                              "author_flair_text": "",
+                              "author_flair_richtext": [
+                                {"e": "text", "t": "Team"},
+                                {"e": "emoji", "u": "https://example.com/e.png"},
+                                {"e": "text", "t": "Seahawks"}
+                              ]
+                            }},
+                            {"kind": "t1", "data": {
+                              "id": "bare", "body": "b", "author": "three", "created_utc": 1
+                            }}
+                          ]}}
+                        ]
+                        """.trimIndent(),
+                    )
+                }
+                .build(),
+        )
+
+        assertTrue(repository.loadComments(postId, "Best").isSuccess)
+
+        val flairs = repository.comments(postId).value.associate { it.id to it.authorFlair }
+        assertEquals("Cardiologist", flairs["plain"])
+        // Richtext arrives as fragments; only the text ones carry anything showable.
+        assertEquals("Team Seahawks", flairs["rich"])
+        assertEquals(null, flairs["bare"])
+    }
+
+    @Test
+    fun aCommunityScopedSearchAsksRedditToRestrictItToThatCommunity() = runBlocking {
+        val requested = mutableListOf<String>()
+        val repository = signedInRepository(
+            OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    requested += chain.request().url.toString()
+                    jsonResponse(chain.request(), """{"data": {"children": [], "after": null}}""")
+                }
+                .build(),
+        )
+
+        assertTrue(repository.refresh("qr/pics/sunset over water", "best").isSuccess)
+
+        val url = requested.first { it.contains("/search") }
+        // Restricted to the community, and the query keeps the words that follow the first
+        // slash-separated segment even though a query may contain slashes of its own.
+        assertTrue(url, url.contains("/r/pics/search"))
+        assertTrue(url, url.contains("restrict_sr=1"))
+        assertTrue(url, url.contains("q=sunset%20over%20water") || url.contains("q=sunset+over+water"))
     }
 
     private fun signedInRepository(apiClient: OkHttpClient): RedditApiRepository {

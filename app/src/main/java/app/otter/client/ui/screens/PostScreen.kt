@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults.Indicator
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -79,14 +80,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlin.math.abs
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import app.otter.client.model.Comment
@@ -102,6 +107,9 @@ import app.otter.client.ui.components.mediaBadgeFor
 import app.otter.client.ui.components.SwipeAction
 import app.otter.client.ui.components.SwipeActionRow
 import app.otter.client.ui.components.compactNumber
+import app.otter.client.ui.components.smoothScrollTo
+import app.otter.client.ui.components.RoundBarButton
+import app.otter.client.ui.components.BAR_EDGE_INSET
 import app.otter.client.ui.components.relativeAge
 import app.otter.client.ui.theme.otterColors
 import kotlinx.coroutines.launch
@@ -167,8 +175,10 @@ fun PostScreen(
             !hidden
         }
     }
-    val topLevelIndices = visibleComments.mapIndexedNotNull { index, comment ->
-        index.takeIf { comment.depth == 0 }
+    val topLevelIndices = remember(visibleComments) {
+        visibleComments.mapIndexedNotNull { index, comment ->
+            index.takeIf { comment.depth == 0 }
+        }
     }
     var showPostActions by rememberSaveable { mutableStateOf(false) }
     var reportTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -186,9 +196,7 @@ fun PostScreen(
         } else {
             topLevelIndices.lastOrNull { it < current } ?: topLevelIndices.last()
         }
-        coroutineScope.launch {
-            listState.animateScrollToItem(HEADER_ITEM_COUNT + target)
-        }
+        coroutineScope.launch { listState.smoothScrollTo(HEADER_ITEM_COUNT + target) }
     }
 
     fun sharePost() {
@@ -239,6 +247,7 @@ fun PostScreen(
                     post = post,
                     textScale = settings.textScale,
                     revealNsfw = settings.alwaysShowNsfw,
+                    hapticsEnabled = settings.haptics,
                     onVote = onPostVote,
                     onSave = onSavePost,
                     onOpenCommunity = { onOpenCommunity(post.community.name) },
@@ -298,7 +307,16 @@ fun PostScreen(
                     }
                 }
             } else {
-                itemsIndexed(visibleComments, key = { _, comment -> comment.id }) { _, comment ->
+                itemsIndexed(visibleComments, key = { _, comment -> comment.id }) { index, comment ->
+                    // A rule separates whole threads, not every reply within one. Inside a
+                    // thread the indent and the rails already carry the structure, and a line
+                    // under each reply sliced the conversation into unrelated-looking strips.
+                    if (index > 0 && comment.depth == 0) {
+                        HorizontalDivider(
+                            color = colors.divider.copy(alpha = .7f),
+                            thickness = .5.dp,
+                        )
+                    }
                     val hiddenReplies = if (comment.id in collapsedCommentIds) {
                         countDescendants(comment.id, sortedComments)
                     } else {
@@ -310,10 +328,6 @@ fun PostScreen(
                             loading = comment.id in expandingComments,
                             textScale = settings.textScale,
                             onClick = { onLoadMoreComments(comment.id) },
-                        )
-                        HorizontalDivider(
-                            color = colors.divider.copy(alpha = .7f),
-                            thickness = .5.dp,
                         )
                         return@itemsIndexed
                     }
@@ -337,7 +351,6 @@ fun PostScreen(
                         onOpenUser = { onOpenUser(comment.author) },
                         onMore = { selectedCommentActions = comment },
                     )
-                    HorizontalDivider(color = colors.divider.copy(alpha = .7f), thickness = .5.dp)
                 }
             }
         }
@@ -351,16 +364,21 @@ fun PostScreen(
             modifier = Modifier.align(Alignment.TopCenter),
         )
 
+        // The two navigation controls sit apart from the bar, at the edges where a thumb
+        // already rests. Walking a thread is a repeated action, so it belongs under the thumb
+        // rather than in the middle of a row shared with one-off actions.
+        RoundBarButton(
+            icon = Icons.Outlined.KeyboardDoubleArrowUp,
+            contentDescription = "Jump to top",
+            modifier = Modifier.align(Alignment.BottomStart).padding(start = BAR_EDGE_INSET),
+        ) {
+            coroutineScope.launch { listState.smoothScrollTo(0) }
+        }
+
         GlassActionBar(
             items = listOf(
                 ActionBarItem(Icons.Outlined.MoreHoriz, "More") { showPostActions = true },
-                ActionBarItem(Icons.Outlined.KeyboardDoubleArrowUp, "Previous comment") {
-                    jumpToComment(forward = false)
-                },
                 ActionBarItem(Icons.Outlined.Share, "Share", emphasized = true) { sharePost() },
-                ActionBarItem(Icons.Outlined.KeyboardArrowDown, "Next comment") {
-                    jumpToComment(forward = true)
-                },
                 ActionBarItem(Icons.Outlined.Menu, "Communities") { onOpenDrawer() },
             ),
             modifier = Modifier
@@ -368,6 +386,17 @@ fun PostScreen(
                 .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(bottom = 12.dp),
         )
+
+        RoundBarButton(
+            icon = Icons.Outlined.KeyboardArrowDown,
+            contentDescription = "Next comment",
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = BAR_EDGE_INSET),
+            // Both directions on one button, so walking a thread never asks the thumb to move.
+            onLongClick = { jumpToComment(forward = false) },
+            onLongClickLabel = "Previous comment",
+        ) {
+            jumpToComment(forward = true)
+        }
 
         if (showPostActions) {
             PostActionsSheet(
@@ -460,6 +489,7 @@ private fun PostDetailHeader(
     post: Post,
     textScale: Float,
     revealNsfw: Boolean,
+    hapticsEnabled: Boolean,
     onVote: (VoteState) -> Unit,
     onSave: () -> Unit,
     onOpenCommunity: () -> Unit,
@@ -566,6 +596,8 @@ private fun PostDetailHeader(
                     badge = mediaBadgeFor(post),
                     cornerRadius = 0,
                     warningLabel = warningLabel,
+                    peekMedia = post.media,
+                    hapticsEnabled = hapticsEnabled,
                     onReveal = { sensitiveMediaRevealed = true },
                     onOpenMedia = onOpenMedia.takeIf { post.media != null },
                     modifier = Modifier.fillMaxWidth().height(mediaHeight),
@@ -933,17 +965,7 @@ private fun MoreCommentsRow(
         modifier = Modifier
             .fillMaxWidth()
             .background(colors.surface)
-            .drawBehind {
-                repeat(depth) { level ->
-                    val x = (RAIL_INSET + RAIL_STEP * level).toPx()
-                    drawLine(
-                        color = commentRailColors[level % commentRailColors.size],
-                        start = androidx.compose.ui.geometry.Offset(x, 0f),
-                        end = androidx.compose.ui.geometry.Offset(x, size.height),
-                        strokeWidth = 3.dp.toPx(),
-                    )
-                }
-            }
+            .drawBehind { drawCommentRail(depth, commentRailColors) }
             .clickable(enabled = !loading, onClick = onClick)
             .padding(
                 start = RAIL_INSET + RAIL_STEP * depth + 11.dp,
@@ -974,6 +996,32 @@ private fun MoreCommentsRow(
     }
 }
 
+/**
+ * Draws the single rail that belongs to one comment.
+ *
+ * Each comment gets one bar, at its own depth, spanning only its own height. Previously every
+ * row also redrew a rail for each of its ancestors, full height — which, once rows stacked,
+ * joined up into unbroken lines running the entire length of the thread. The indentation and
+ * the rail's own colour already say how deep a reply sits, so the ancestor copies were only
+ * ever adding ink.
+ *
+ * The bar is inset top and bottom so consecutive replies at the same depth stay visibly
+ * separate instead of merging back into one line.
+ */
+private fun DrawScope.drawCommentRail(depth: Int, railColors: List<Color>) {
+    if (depth == 0) return
+    val x = (RAIL_INSET + RAIL_STEP * depth + RAIL_GUTTER).toPx()
+    val inset = RAIL_VERTICAL_INSET.toPx()
+    if (size.height <= inset * 2) return
+    drawLine(
+        color = railColors[(depth - 1) % railColors.size],
+        start = Offset(x, inset),
+        end = Offset(x, size.height - inset),
+        strokeWidth = RAIL_WIDTH.toPx(),
+        cap = StrokeCap.Round,
+    )
+}
+
 private val commentRailColors = listOf(
     Color(0xFFFF6B6B),
     Color(0xFFFFA94D),
@@ -986,6 +1034,11 @@ private val commentRailColors = listOf(
 /** How far in the first rail sits, and how much each further level steps. */
 private val RAIL_INSET = 10.dp
 private val RAIL_STEP = 14.dp
+
+/** The rail sits in the gutter immediately left of its own comment's text. */
+private val RAIL_GUTTER = 4.dp
+private val RAIL_WIDTH = 3.dp
+private val RAIL_VERTICAL_INSET = 5.dp
 
 private fun commentScoreColor(
     comment: Comment,
@@ -1039,19 +1092,7 @@ private fun CommentRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(colors.surface)
-                .drawBehind {
-                    // One rail per ancestor, each a step further in, so the shape of the thread
-                    // is readable from the left edge alone.
-                    repeat(depth) { level ->
-                        val x = (RAIL_INSET + RAIL_STEP * level).toPx()
-                        drawLine(
-                            color = railColors[level % railColors.size],
-                            start = androidx.compose.ui.geometry.Offset(x, 0f),
-                            end = androidx.compose.ui.geometry.Offset(x, size.height),
-                            strokeWidth = 3.dp.toPx(),
-                        )
-                    }
-                }
+                .drawBehind { drawCommentRail(depth, railColors) }
                 .clickable(onClickLabel = if (hiddenReplies > 0) "Expand comment" else "Collapse comment") {
                     onCollapse()
                 }
@@ -1097,6 +1138,23 @@ private fun CommentRow(
                                 },
                             ),
                     )
+                    // After the author and before the badges: it qualifies the name, so it
+                    // reads as part of it. Weighted so a long flair gives way to the username
+                    // rather than pushing the age and score off the end of the line.
+                    comment.authorFlair?.let { flair ->
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            text = flair,
+                            color = colors.textTertiary,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .background(colors.spoiler, RoundedCornerShape(4.dp))
+                                .padding(horizontal = 4.dp, vertical = 1.dp),
+                        )
+                    }
                     if (comment.isSubmitter) {
                         Spacer(Modifier.width(5.dp))
                         Text(

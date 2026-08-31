@@ -2,6 +2,7 @@ package app.otter.client.data
 
 import app.otter.client.data.oauth.RedditApiConfiguration
 import app.otter.client.model.PostType
+import app.otter.client.model.SubmissionKind
 import app.otter.client.model.VoteState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -10,6 +11,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import app.otter.client.model.Community
@@ -168,6 +170,43 @@ class InMemoryRedditRepositoryTest {
         assertEquals(1, submitted.score)
         assertTrue(submitted.isRead)
         assertTrue(repository.comments(submitted.id).value.isEmpty())
+    }
+
+    @Test
+    fun submitPostAsLink_recordsTheDestinationAndCarriesNoSelfText() {
+        val repository = InMemoryRedditRepository()
+
+        val submitted = repository.submitPost(
+            communityName = "r/android",
+            title = "A link worth sharing",
+            body = "Text a link post does not carry",
+            kind = SubmissionKind.LINK,
+            linkUrl = "  www.example.com/story  ",
+        )
+
+        assertEquals(PostType.LINK, submitted.type)
+        assertEquals("https://www.example.com/story", submitted.destinationUrl)
+        assertEquals("example.com", submitted.domain)
+        assertNull(submitted.body)
+    }
+
+    @Test
+    fun submitPostAsLink_rejectsAnUnusableAddress() {
+        val repository = InMemoryRedditRepository()
+
+        try {
+            repository.submitPost(
+                communityName = "r/android",
+                title = "A link worth sharing",
+                body = "",
+                kind = SubmissionKind.LINK,
+                linkUrl = "   ",
+            )
+            fail("A link post without a web address should not be accepted")
+        } catch (expected: IllegalArgumentException) {
+            assertEquals("A link post needs a web address", expected.message)
+        }
+        assertTrue(repository.feed.value.none { it.title == "A link worth sharing" })
     }
 
     @Test

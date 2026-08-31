@@ -384,10 +384,10 @@ internal fun RedditApiConfigurationDialog(
             containerColor = colors.surfaceRaised,
             titleContentColor = colors.textPrimary,
             textContentColor = colors.textSecondary,
-            title = { Text("Restore build defaults?") },
+            title = { Text("Clear Reddit API settings?") },
             text = {
                 Text(
-                    "This removes the custom API values and disconnects the current Reddit session.",
+                    "This removes your client details and disconnects the current Reddit session. Currents does not provide a client ID.",
                 )
             },
             confirmButton = {
@@ -395,11 +395,11 @@ internal fun RedditApiConfigurationDialog(
                     onClick = {
                         if (!onReset()) {
                             confirmReset = false
-                            validationMessage = "Reddit API defaults could not be restored"
+                            validationMessage = "Reddit API settings could not be cleared"
                         }
                     },
                 ) {
-                    Text("Restore")
+                    Text("Clear")
                 }
             },
             dismissButton = {
@@ -429,7 +429,7 @@ internal fun RedditApiConfigurationDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    "Enter the values registered for your Reddit app. Changing them disconnects the current session.",
+                    "Currents does not include a Reddit client ID. Enter details for your own registered Reddit app. Changing them disconnects the current session.",
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.textSecondary,
                 )
@@ -510,7 +510,7 @@ internal fun RedditApiConfigurationDialog(
                     onClick = { confirmReset = true },
                     modifier = Modifier.align(Alignment.Start),
                 ) {
-                    Text("Restore build defaults")
+                    Text("Clear API settings")
                 }
             }
         },
@@ -556,7 +556,7 @@ fun AboutScreen(
         Spacer(Modifier.height(64.dp))
         OtterMark(Modifier.size(92.dp))
         Spacer(Modifier.height(18.dp))
-        Text("Otter", color = colors.textPrimary, style = MaterialTheme.typography.headlineSmall)
+        Text("Currents", color = colors.textPrimary, style = MaterialTheme.typography.headlineSmall)
         Text("a calm, fast client for Reddit", color = colors.textSecondary, style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(28.dp))
         Surface(
@@ -572,13 +572,13 @@ fun AboutScreen(
                 )
                 Spacer(Modifier.height(7.dp))
                 Text(
-                    "Otter pairs a compact feed, nested comment rails, configurable themes, and fast two-stage gestures with an original Android-native identity.",
+                    "Currents pairs a compact feed, nested comment rails, configurable themes, and fast two-stage gestures with an original Android-native identity.",
                     color = colors.textSecondary,
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(15.dp))
                 Text(
-                    "Otter is an independent prototype and is not affiliated with Reddit or Robot Swingset. Narwhal names, artwork, and branding are not included.",
+                    "Currents is an independent prototype and is not affiliated with Reddit or Robot Swingset. Narwhal names, artwork, and branding are not included.",
                     color = colors.textTertiary,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -609,7 +609,7 @@ fun AboutScreen(
         Text("Version 1.0.0 · built with Jetpack Compose", color = colors.textTertiary, style = MaterialTheme.typography.bodySmall)
         Spacer(Modifier.height(18.dp))
     }
-    SettingsTopBar(title = "About Otter", onBack = onBack)
+    SettingsTopBar(title = "About Currents", onBack = onBack)
 }
 
 @Composable

@@ -28,6 +28,37 @@ class RedditPreviewSizesTest {
         assertEquals("https://preview.redd.it/w360.jpg?s=sig&a=1", chosen)
     }
 
+    private fun galleryEntry(vararg widths: Int): JSONObject {
+        val entries = widths.joinToString(",") { width ->
+            """{"u": "https://preview.redd.it/g$width.jpg?width=$width&amp;s=sig", "x": $width, "y": 100}"""
+        }
+        return JSONObject("""{"p": [$entries]}""")
+    }
+
+    @Test
+    fun readsAGalleryItemsOwnLadderDespiteItsDifferentKeys() {
+        val entry = galleryEntry(108, 320, 640, 1080)
+
+        assertEquals(
+            "https://preview.redd.it/g1080.jpg?width=1080&s=sig",
+            RedditPreviewSizes.galleryCopyCovering(entry, 1080),
+        )
+        assertEquals(
+            "https://preview.redd.it/g320.jpg?width=320&s=sig",
+            RedditPreviewSizes.galleryCopyCovering(entry, 320),
+        )
+    }
+
+    @Test
+    fun fallsBackToTheWidestGalleryCopyWhenNoneCoversTheTarget() {
+        assertNull(RedditPreviewSizes.galleryCopyCovering(galleryEntry(108, 216), 1080))
+        assertEquals(
+            "https://preview.redd.it/g216.jpg?width=216&s=sig",
+            RedditPreviewSizes.largestGalleryCopy(galleryEntry(108, 216)),
+        )
+        assertNull(RedditPreviewSizes.largestGalleryCopy(JSONObject("{}")))
+    }
+
     @Test
     fun fallsBackToNothingWhenEveryCopyIsTooSmallOrMissing() {
         assertNull(RedditPreviewSizes.smallestCovering(image(108, 216), 320))

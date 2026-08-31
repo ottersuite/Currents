@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -30,13 +31,16 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.SaveAlt
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.automirrored.outlined.VolumeOff
 import androidx.compose.material.icons.automirrored.outlined.VolumeUp
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -46,23 +50,28 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
+import app.otter.client.data.MediaSaver
 import app.otter.client.model.MediaAsset
 import app.otter.client.model.MediaKind
 import app.otter.client.ui.components.media.MediaSurface
 import app.otter.client.ui.components.media.ZoomableImage
 import app.otter.client.ui.components.media.rememberMediaPlayer
+import app.otter.client.ui.components.media.rememberMediaSaveRequest
 import app.otter.client.ui.components.media.useScrubbingMode
 import app.otter.client.ui.theme.otterColors
 import kotlin.math.abs
@@ -83,6 +92,9 @@ data class MediaViewerRequest(
 }
 
 private const val DISMISS_DISTANCE_PX = 320f
+
+/** How long the title and controls stay up once playback is under way. */
+private const val CHROME_AUTO_HIDE_MILLIS = 2_500L
 private const val SCRUB_PREVIEW_INTERVAL_MS = 33L
 
 /**
@@ -91,18 +103,27 @@ private const val SCRUB_PREVIEW_INTERVAL_MS = 33L
  * Only the settled page plays: swiping to the next clip stops the previous one rather than
  * leaving several decoders running. A vertical drag dismisses, fading the backdrop as it goes,
  * and stands down while an image is zoomed so the drag pans instead.
+ *
+ * Holding the media opens what can be done with it. The gesture is free here in a way it is not
+ * in the feed: there is exactly one thing on screen, and nothing else a hold could plausibly
+ * mean. It offers rather than acts -- a hold is easy to trigger by accident, and writing a file
+ * to the gallery unasked is not something a stray press should be able to do.
  */
 @Composable
 fun MediaViewerScreen(
     request: MediaViewerRequest,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    hapticsEnabled: Boolean = true,
+    onSaveMedia: (MediaAsset) -> Unit = {},
+    onSaveDenied: () -> Unit = {},
 ) {
     val pagerState = rememberPagerState(
         initialPage = request.safeStartIndex,
         pageCount = { request.assets.size },
     )
     var chromeVisible by remember { mutableStateOf(true) }
+    var scrubbing by remember { mutableStateOf(false) }
     var muted by remember { mutableStateOf(true) }
     var zoomed by remember { mutableStateOf(false) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
@@ -114,6 +135,9 @@ fun MediaViewerScreen(
     // A muted loop should not hold the screen awake, but an unmuted GIF is being actively watched.
     val view = LocalView.current
     val currentAsset = request.assets[pagerState.currentPage.coerceIn(0, request.assets.lastIndex)]
+    val haptics = LocalHapticFeedback.current
+    val requestSave = rememberMediaSaveRequest(onSave = onSaveMedia, onDenied = onSaveDenied)
+    var actionsTarget by remember { mutableStateOf<MediaAsset?>(null) }
     DisposableEffect(currentAsset, muted) {
         view.keepScreenOn = currentAsset.needsPlayer &&
             (currentAsset.kind == MediaKind.VIDEO || !muted)
@@ -150,7 +174,15 @@ fun MediaViewerScreen(
                 scrubbable = request.assets.size == 1,
                 onMutedChange = { muted = it },
                 onZoomedChange = { zoomed = it },
+                onScrubbingChange = { scrubbing = it },
                 onTap = { chromeVisible = !chromeVisible },
+                onHold = {
+                    // The sheet takes a moment to arrive, so the hold acknowledges itself first.
+                    if (hapticsEnabled) {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    }
+                    actionsTarget = request.assets[page]
+                },
                 onDismissDrag = { delta -> dragOffset += delta },
                 onDismissDragEnd = {
                     if (abs(dragOffset) > DISMISS_DISTANCE_PX) onClose() else dragOffset = 0f
@@ -185,6 +217,29 @@ fun MediaViewerScreen(
                     .padding(horizontal = 20.dp, vertical = 96.dp),
             )
         }
+    }
+
+    actionsTarget?.let { asset ->
+        MediaActionsSheet(
+            asset = asset,
+            onDismiss = { actionsTarget = null },
+            onSave = {
+                actionsTarget = null
+                requestSave(asset)
+            },
+        )
+    }
+
+    // The title has done its job once you have read it, and on a clip it is sitting on top of
+    // the thing you opened. It steps out of the way on its own, and a tap brings it back --
+    // which restarts this, since the effect keys on the same flag it sets.
+    //
+    // Only for media that plays. A still image has no "while it is playing", and there is no
+    // reason to take its caption away from someone still looking at it.
+    LaunchedEffect(chromeVisible, currentAsset, scrubbing) {
+        if (!chromeVisible || scrubbing || !currentAsset.isPlayable) return@LaunchedEffect
+        delay(CHROME_AUTO_HIDE_MILLIS)
+        chromeVisible = false
     }
 
     // Keep the pager honest if the request changes underneath an open viewer.
@@ -238,7 +293,9 @@ private fun MediaPage(
     scrubbable: Boolean,
     onMutedChange: (Boolean) -> Unit,
     onZoomedChange: (Boolean) -> Unit,
+    onScrubbingChange: (Boolean) -> Unit,
     onTap: () -> Unit,
+    onHold: () -> Unit,
     onDismissDrag: (Float) -> Unit,
     onDismissDragEnd: () -> Unit,
 ) {
@@ -266,6 +323,7 @@ private fun MediaPage(
             modifier = Modifier.fillMaxSize(),
             onZoomedChange = onZoomedChange,
             onTap = onTap,
+            onLongPress = onHold,
         )
 
         else -> PlayablePage(
@@ -275,7 +333,9 @@ private fun MediaPage(
             chromeVisible = chromeVisible,
             scrubbable = scrubbable,
             onMutedChange = onMutedChange,
+            onScrubbingChange = onScrubbingChange,
             onTap = onTap,
+            onHold = onHold,
         )
     }
     }
@@ -289,8 +349,13 @@ private fun PlayablePage(
     chromeVisible: Boolean,
     scrubbable: Boolean,
     onMutedChange: (Boolean) -> Unit,
+    onScrubbingChange: (Boolean) -> Unit,
     onTap: () -> Unit,
+    onHold: () -> Unit,
 ) {
+    // Captured by a gesture detector that outlives the recompositions creating these lambdas.
+    val currentTap by rememberUpdatedState(onTap)
+    val currentHold by rememberUpdatedState(onHold)
     var playbackFailed by remember(asset) { mutableStateOf(false) }
     val player = rememberMediaPlayer(
         asset = asset,
@@ -308,6 +373,7 @@ private fun PlayablePage(
                 contentDescription = asset.caption,
                 modifier = Modifier.fillMaxSize(),
                 onTap = onTap,
+                onLongPress = onHold,
             )
         } else {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -327,6 +393,8 @@ private fun PlayablePage(
     var scrubbing by remember(player) { mutableStateOf(false) }
     var resumeAfterScrub by remember(player) { mutableStateOf(false) }
     var settleAfterScrub by remember(player) { mutableStateOf(false) }
+    // The viewer hides its chrome on a timer; a drag in progress is the one time it must not.
+    LaunchedEffect(scrubbing) { onScrubbingChange(scrubbing) }
 
     LaunchedEffect(player) {
         while (isActive) {
@@ -380,8 +448,14 @@ private fun PlayablePage(
                 fallbackAspectRatio = asset.aspectRatio,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .pointerInput(asset, scrubbable, durationMs) {
-                        detectTapGestures(onTap = { onTap() })
+                    // Only the asset: the tap detector has no interest in the scrub settings,
+                    // and rebuilding it when the duration arrives would cancel a hold in
+                    // progress.
+                    .pointerInput(asset) {
+                        detectTapGestures(
+                            onTap = { currentTap() },
+                            onLongPress = { currentHold() },
+                        )
                     }
                     .pointerInput(asset, scrubbable, durationMs) {
                         if (!scrubbable || durationMs <= 0L) return@pointerInput
@@ -540,6 +614,62 @@ private fun VideoControls(
                 tint = Color.White,
                 modifier = Modifier.size(24.dp),
             )
+        }
+    }
+}
+
+/**
+ * What can be done with the asset on screen.
+ *
+ * One row today, and the shape the others belong in: a hold is the natural place to reach for
+ * anything about the media itself rather than about the post around it.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MediaActionsSheet(
+    asset: MediaAsset,
+    onDismiss: () -> Unit,
+    onSave: () -> Unit,
+) {
+    val colors = MaterialTheme.otterColors
+    val noun = when (asset.kind) {
+        MediaKind.IMAGE -> "image"
+        MediaKind.ANIMATED -> "GIF"
+        MediaKind.VIDEO -> "video"
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = colors.surface) {
+        Column(modifier = Modifier.padding(bottom = 24.dp)) {
+            if (MediaSaver.canSave(asset)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onSave)
+                        .padding(horizontal = 22.dp, vertical = 15.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.SaveAlt,
+                        contentDescription = null,
+                        tint = colors.textPrimary,
+                        modifier = Modifier.size(21.dp),
+                    )
+                    Spacer(Modifier.width(18.dp))
+                    Text(
+                        "Save $noun",
+                        color = colors.textPrimary,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
+            } else {
+                // Better to say why than to offer a button that can only apologise.
+                Text(
+                    "Reddit streams this $noun in pieces, so there is no file to save.",
+                    color = colors.textSecondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 18.dp),
+                )
+            }
         }
     }
 }

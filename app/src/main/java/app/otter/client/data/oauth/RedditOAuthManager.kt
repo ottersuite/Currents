@@ -142,10 +142,7 @@ class RedditOAuthManager(
                 check(store.saveCredential(credentialStorageKey, credential)) {
                     "Could not securely save the Reddit account"
                 }
-                userToken = CachedToken(
-                    value = token.accessToken,
-                    expiresAtMillis = expiryFromNow(token.expiresInSeconds),
-                )
+                cacheToken(token.accessToken, token.expiresInSeconds)
                 val account = RedditAccount(identity.id, identity.username, scopes)
                 mutableAccountState.value = RedditAccountState.SignedIn(account)
                 account
@@ -160,6 +157,11 @@ class RedditOAuthManager(
 
     suspend fun invalidate(rejected: RedditAccessToken) = tokenMutex.withLock {
         if (userToken?.value == rejected.value) userToken = null
+        // Reddit has refused this token, so the persisted copy is worthless too. Dropping it
+        // here is what stops the next cold start from confidently replaying a dead token.
+        if (store.loadAccessToken(credentialStorageKey)?.value == rejected.value) {
+            store.saveAccessToken(credentialStorageKey, null)
+        }
     }
 
     suspend fun disconnect(): Result<Unit> {
@@ -237,6 +239,7 @@ class RedditOAuthManager(
 
     private fun validUserTokenLocked(): String {
         current(userToken)?.let { return it }
+        restoredToken()?.let { return it }
         val credential = store.loadCredential(credentialStorageKey)
             ?: throw RedditAuthenticationException("Connect your Reddit account first")
         val token = requestToken(
@@ -256,8 +259,39 @@ class RedditOAuthManager(
                 "Could not securely update the Reddit session"
             }
         }
-        userToken = CachedToken(token.accessToken, expiryFromNow(token.expiresInSeconds))
+        cacheToken(token.accessToken, token.expiresInSeconds)
         return token.accessToken
+    }
+
+    /**
+     * Adopts a token left behind by an earlier process, when it has enough life left to be worth
+     * using.
+     *
+     * The persisted expiry is wall-clock, so it is only as trustworthy as the device's clock. It
+     * does not need to be authoritative: a token that turns out to be dead comes back as a 401,
+     * and [invalidate] already drops it and forces a refresh. The cost of being wrong is one
+     * retried request; the cost of not trying is a round trip on every single cold start.
+     */
+    private fun restoredToken(): String? {
+        val stored = store.loadAccessToken(credentialStorageKey) ?: return null
+        val remaining = stored.expiresAtEpochMillis - wallClockMillis()
+        if (remaining <= TOKEN_EXPIRY_SKEW_MILLIS) {
+            store.saveAccessToken(credentialStorageKey, null)
+            return null
+        }
+        // Re-seat it against the monotonic clock so the rest of this process uses the fast path
+        // and never has to trust the wall clock again.
+        userToken = CachedToken(stored.value, monotonicMillis() + remaining)
+        return stored.value
+    }
+
+    private fun cacheToken(accessToken: String, expiresInSeconds: Long) {
+        val lifetimeMillis = TimeUnit.SECONDS.toMillis(expiresInSeconds.coerceAtLeast(60L))
+        userToken = CachedToken(accessToken, monotonicMillis() + lifetimeMillis)
+        store.saveAccessToken(
+            credentialStorageKey,
+            StoredAccessToken(accessToken, wallClockMillis() + lifetimeMillis),
+        )
     }
 
     private fun exchangeCode(code: String): TokenResponse = requestToken(
@@ -350,9 +384,6 @@ class RedditOAuthManager(
     private fun current(token: CachedToken?): String? = token
         ?.takeIf { cached -> cached.expiresAtMillis - monotonicMillis() > TOKEN_EXPIRY_SKEW_MILLIS }
         ?.value
-
-    private fun expiryFromNow(expiresInSeconds: Long): Long =
-        monotonicMillis() + TimeUnit.SECONDS.toMillis(expiresInSeconds.coerceAtLeast(60L))
 
     private fun decode(value: String): String =
         URLDecoder.decode(value, StandardCharsets.UTF_8.name())
