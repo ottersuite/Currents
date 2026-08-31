@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material.icons.outlined.Casino
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.FilterAlt
@@ -100,6 +101,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
+import app.otter.client.BuildConfig
 import app.otter.client.data.oauth.RedditApiConfiguration
 import app.otter.client.model.RedditAccountState
 import app.otter.client.ui.OtterSettings
@@ -128,7 +130,7 @@ fun SettingsScreen(
     onToggleHaptics: () -> Unit,
     onToggleDimRead: () -> Unit,
     onToggleFlairs: () -> Unit,
-    onToggleAlwaysShowNsfw: () -> Unit,
+    onOpenNsfw: () -> Unit,
     onReset: () -> Unit,
     onMessage: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -260,12 +262,14 @@ fun SettingsScreen(
                     onClick = onClearReadHistory,
                 )
                 SettingsDivider()
-                SettingsSwitchRow(
+                SettingsLinkRow(
                     icon = Icons.Outlined.Visibility,
-                    title = "Always show NSFW media",
-                    subtitle = "Skip the cover on adult posts · spoilers stay hidden",
-                    checked = settings.alwaysShowNsfw,
-                    onToggle = onToggleAlwaysShowNsfw,
+                    title = "NSFW content",
+                    subtitle = listOf(
+                        if (settings.alwaysShowNsfw) "Media shown" else "Media covered",
+                        if (settings.showRandomNsfwButton) "Random button visible" else "Random button hidden",
+                    ).joinToString(" · "),
+                    onClick = onOpenNsfw,
                 )
                 SettingsDivider()
                 SettingsSwitchRow(
@@ -351,6 +355,65 @@ fun SettingsScreen(
             },
         )
     }
+}
+
+@Composable
+fun NsfwSettingsScreen(
+    settings: OtterSettings,
+    onBack: () -> Unit,
+    onToggleAlwaysShowNsfw: () -> Unit,
+    onToggleShowRandomNsfwButton: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MaterialTheme.otterColors
+    val density = LocalDensity.current
+    val statusBarHeight = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
+    val navigationBarHeight = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
+
+    LazyColumn(
+        contentPadding = PaddingValues(top = statusBarHeight + 64.dp, bottom = navigationBarHeight + 32.dp),
+        modifier = modifier
+            .fillMaxSize()
+            .background(colors.canvas)
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+    ) {
+        item {
+            SettingsSectionLabel("NSFW CONTENT")
+            SettingsGroup {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 13.dp)) {
+                    Text(
+                        "Choose how adult posts appear and whether the discovery shortcut is available in the side menu.",
+                        color = colors.textSecondary,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        "Spoilers remain covered even when NSFW media is shown automatically.",
+                        color = colors.textTertiary,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 5.dp),
+                    )
+                }
+                SettingsDivider()
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.Visibility,
+                    title = "Always show NSFW media",
+                    subtitle = "Skip the cover on adult posts",
+                    checked = settings.alwaysShowNsfw,
+                    onToggle = onToggleAlwaysShowNsfw,
+                )
+                SettingsDivider()
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.Casino,
+                    title = "Random NSFW button",
+                    subtitle = "Show the adult-community shortcut in the side menu",
+                    checked = settings.showRandomNsfwButton,
+                    onToggle = onToggleShowRandomNsfwButton,
+                )
+            }
+        }
+    }
+
+    SettingsTopBar(title = "NSFW content", onBack = onBack)
 }
 
 @Composable
@@ -606,7 +669,11 @@ fun AboutScreen(
             }
         }
         Spacer(Modifier.weight(1f))
-        Text("Version 1.0.0 · built with Jetpack Compose", color = colors.textTertiary, style = MaterialTheme.typography.bodySmall)
+        Text(
+            "Version ${BuildConfig.VERSION_NAME} · built with Jetpack Compose",
+            color = colors.textTertiary,
+            style = MaterialTheme.typography.bodySmall,
+        )
         Spacer(Modifier.height(18.dp))
     }
     SettingsTopBar(title = "About Currents", onBack = onBack)

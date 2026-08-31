@@ -10,6 +10,7 @@ import app.otter.client.ui.screens.FeedScreen
 import app.otter.client.ui.screens.PostScreen
 import app.otter.client.ui.screens.AdvancedSettingsScreen
 import app.otter.client.ui.screens.SettingsScreen
+import app.otter.client.ui.screens.NsfwSettingsScreen
 import app.otter.client.ui.theme.OtterTheme
 
 @Preview(
@@ -159,9 +160,28 @@ private fun LightSettingsPreview() {
             onToggleHaptics = {},
             onToggleDimRead = {},
             onToggleFlairs = {},
-            onToggleAlwaysShowNsfw = {},
+            onOpenNsfw = {},
             onReset = {},
             onMessage = {},
+        )
+    }
+}
+
+@Preview(
+    name = "Currents · NSFW settings",
+    widthDp = 412,
+    heightDp = 915,
+    showBackground = true,
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun NsfwSettingsPreview() {
+    OtterTheme(darkTheme = true) {
+        NsfwSettingsScreen(
+            settings = OtterSettings(),
+            onBack = {},
+            onToggleAlwaysShowNsfw = {},
+            onToggleShowRandomNsfwButton = {},
         )
     }
 }

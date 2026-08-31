@@ -96,6 +96,7 @@ fun OtterSideMenu(
     onDismiss: () -> Unit,
     onSelectFeed: (String) -> Unit,
     onOpenSearch: () -> Unit,
+    showRandomNsfw: Boolean,
     onRandomNsfw: () -> Unit,
     onAccountClick: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -286,18 +287,20 @@ fun OtterSideMenu(
                             modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
                         )
                     }
-                    Spacer(Modifier.height(12.dp))
-                    DrawerSectionLabel("DISCOVER")
-                    DrawerRow(
-                        title = "Random NSFW",
-                        subtitle = "Open a random adult community",
-                        icon = Icons.Outlined.Casino,
-                        selected = false,
-                        onClick = {
-                            onRandomNsfw()
-                            onDismiss()
-                        },
-                    )
+                    if (showRandomNsfw) {
+                        Spacer(Modifier.height(12.dp))
+                        DrawerSectionLabel("DISCOVER")
+                        DrawerRow(
+                            title = "Random NSFW",
+                            subtitle = "Open a random adult community",
+                            icon = Icons.Outlined.Casino,
+                            selected = false,
+                            onClick = {
+                                onRandomNsfw()
+                                onDismiss()
+                            },
+                        )
+                    }
                     Spacer(Modifier.height(14.dp))
                 }
 

@@ -3,17 +3,15 @@ package app.otter.client.ui
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import androidx.activity.BackEventCompat
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.navigationBars
@@ -40,10 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -57,12 +52,12 @@ import app.otter.client.ui.screens.AboutScreen
 import app.otter.client.ui.screens.FeedScreen
 import app.otter.client.ui.screens.AdvancedSettingsScreen
 import app.otter.client.ui.screens.MediaViewerScreen
+import app.otter.client.ui.screens.NsfwSettingsScreen
 import app.otter.client.ui.screens.PostScreen
 import app.otter.client.ui.screens.SearchScreen
 import app.otter.client.ui.screens.SettingsScreen
 import app.otter.client.ui.theme.OtterTheme
 import app.otter.client.ui.theme.otterColors
-import kotlin.math.abs
 import kotlinx.coroutines.flow.MutableStateFlow
 
 private data class ReplyTarget(val id: String?, val author: String?)
@@ -198,6 +193,23 @@ private fun OtterAppContent(
         enabled = (screen != AppScreen.Feed || canReturnToPreviousFeed) && !drawerVisible,
     ) {
         viewModel.navigateBack()
+    }
+
+    val activity = LocalContext.current.findActivity()
+    PredictiveBackHandler(
+        enabled = !drawerVisible && (screen == AppScreen.Feed || screen == AppScreen.Post),
+    ) { progress ->
+        var swipeEdge = BackEventCompat.EDGE_NONE
+        progress.collect { event -> swipeEdge = event.swipeEdge }
+
+        if (isRightEdgeBackGesture(swipeEdge)) {
+            drawerVisible = true
+        } else if (!viewModel.navigateBack()) {
+            // At the root feed there is nowhere inside Currents to go back to. This matches the
+            // activity's normal unhandled-back behavior while still letting us own right-edge
+            // gestures so they can open the drawer from any vertical position.
+            activity?.finishAfterTransition()
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(colors.canvas)) {
@@ -348,7 +360,7 @@ private fun OtterAppContent(
                     onToggleHaptics = viewModel::toggleHaptics,
                     onToggleDimRead = viewModel::toggleDimReadPosts,
                     onToggleFlairs = viewModel::togglePostFlairs,
-                    onToggleAlwaysShowNsfw = viewModel::toggleAlwaysShowNsfw,
+                    onOpenNsfw = viewModel::openNsfwSettings,
                     onUpdateFeedActions = viewModel::updateFeedActions,
                     onUpdatePostSwipeActions = viewModel::updatePostSwipeActions,
                     onUpdateCommentSwipeActions = viewModel::updateCommentSwipeActions,
@@ -357,6 +369,13 @@ private fun OtterAppContent(
                     onClearReadHistory = viewModel::clearReadHistory,
                     onReset = viewModel::resetSettings,
                     onMessage = viewModel::notify,
+                )
+
+                AppScreen.NsfwSettings -> NsfwSettingsScreen(
+                    settings = settings,
+                    onBack = { viewModel.navigateBack() },
+                    onToggleAlwaysShowNsfw = viewModel::toggleAlwaysShowNsfw,
+                    onToggleShowRandomNsfwButton = viewModel::toggleShowRandomNsfwButton,
                 )
 
                 AppScreen.AdvancedSettings -> AdvancedSettingsScreen(
@@ -394,13 +413,6 @@ private fun OtterAppContent(
             }
         }
 
-        if (!drawerVisible && (screen == AppScreen.Feed || screen == AppScreen.Post)) {
-            MenuEdgeSwipe(
-                onOpen = { drawerVisible = true },
-                modifier = Modifier.align(Alignment.CenterEnd),
-            )
-        }
-
         OtterSideMenu(
             visible = drawerVisible,
             selectedFeed = selectedFeed,
@@ -410,6 +422,7 @@ private fun OtterAppContent(
             onDismiss = { drawerVisible = false },
             onSelectFeed = viewModel::selectFeed,
             onOpenSearch = viewModel::openSearch,
+            showRandomNsfw = settings.showRandomNsfwButton,
             onRandomNsfw = viewModel::openRandomNsfw,
             onAccountClick = {
                 if (accountState == RedditAccountState.SignedOut) {
@@ -547,54 +560,5 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     else -> null
 }
 
-/**
- * The strip along the right edge that pulls the menu open.
- *
- * On a phone using gesture navigation this edge belongs to the system back gesture, and an app
- * that simply listens here never sees the swipe at all. [View.setSystemGestureExclusionRects]
- * asks the system to stand down over this strip. The platform caps that exclusion at 200dp per
- * edge, so the band is centred and explicitly sized rather than running the full height: a swipe
- * that starts near the very top or bottom of the screen is still the system's back gesture.
- */
-@Composable
-private fun MenuEdgeSwipe(onOpen: () -> Unit, modifier: Modifier = Modifier) {
-    val density = LocalDensity.current
-
-    Box(
-        modifier = modifier
-            .height(EDGE_GESTURE_BAND)
-            .width(EDGE_GESTURE_WIDTH)
-            // Compose owns the view's exclusion rect list, so assigning it directly on the View
-            // gets overwritten and the system keeps the swipe. This modifier registers through
-            // Compose instead, which is why the back gesture was still firing alongside ours.
-            .systemGestureExclusion()
-            .pointerInput(Unit) {
-                val openThreshold = with(density) { EDGE_OPEN_DISTANCE.toPx() }
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    var totalX = 0f
-                    var totalY = 0f
-                    var opened = false
-
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!change.pressed) break
-                        val delta = change.positionChange()
-                        totalX += delta.x
-                        totalY += delta.y
-                        // Leftward and mostly horizontal, or it belongs to whatever is underneath.
-                        if (totalX < 0f && abs(totalX) > abs(totalY)) change.consume()
-                        if (!opened && totalX <= -openThreshold && abs(totalX) > abs(totalY)) {
-                            opened = true
-                            onOpen()
-                        }
-                    }
-                }
-            },
-    )
-}
-
-private val EDGE_GESTURE_WIDTH = 28.dp
-private val EDGE_GESTURE_BAND = 200.dp
-private val EDGE_OPEN_DISTANCE = 40.dp
+internal fun isRightEdgeBackGesture(swipeEdge: Int): Boolean =
+    swipeEdge == BackEventCompat.EDGE_RIGHT

@@ -67,6 +67,7 @@ enum class AppScreen {
     Search,
     Post,
     Settings,
+    NsfwSettings,
     AdvancedSettings,
     About,
 }
@@ -125,6 +126,8 @@ data class OtterSettings(
     val showPostFlairs: Boolean = true,
     /** Skip the NSFW cover on media. Spoilers stay covered; they hide plot, not skin. */
     val alwaysShowNsfw: Boolean = false,
+    /** Keep the adult-community shortcut visible in the side menu. */
+    val showRandomNsfwButton: Boolean = true,
     /** Opt-in: sign in inside Otter instead of an Auth Tab. See [WEB_VIEW_SIGN_IN_RATIONALE]. */
     val webViewSignIn: Boolean = false,
     val feedActions: List<FeedAction> = listOf(
@@ -712,6 +715,10 @@ class OtterViewModel @JvmOverloads constructor(
         _screen.value = AppScreen.AdvancedSettings
     }
 
+    fun openNsfwSettings() {
+        _screen.value = AppScreen.NsfwSettings
+    }
+
     fun openAbout() {
         _screen.value = AppScreen.About
     }
@@ -723,8 +730,8 @@ class OtterViewModel @JvmOverloads constructor(
             _screen.value = AppScreen.Feed
             true
         }
-        // Advanced is reached from Settings, so back returns there rather than to the feed.
-        AppScreen.AdvancedSettings -> {
+        // Submenus are reached from Settings, so back returns there rather than to the feed.
+        AppScreen.AdvancedSettings, AppScreen.NsfwSettings -> {
             _screen.value = AppScreen.Settings
             true
         }
@@ -1351,6 +1358,9 @@ class OtterViewModel @JvmOverloads constructor(
 
     fun toggleAlwaysShowNsfw() = updateSettings { copy(alwaysShowNsfw = !alwaysShowNsfw) }
 
+    fun toggleShowRandomNsfwButton() =
+        updateSettings { copy(showRandomNsfwButton = !showRandomNsfwButton) }
+
     fun toggleWebViewSignIn() = updateSettings { copy(webViewSignIn = !webViewSignIn) }
 
     fun updateFeedActions(actions: List<FeedAction>) = updateSettings {
@@ -1649,6 +1659,7 @@ class OtterViewModel @JvmOverloads constructor(
         dimReadPosts = preferences.getBoolean("dimReadPosts", true),
         showPostFlairs = preferences.getBoolean("showPostFlairs", true),
         alwaysShowNsfw = preferences.getBoolean("alwaysShowNsfw", false),
+        showRandomNsfwButton = preferences.getBoolean("showRandomNsfwButton", true),
         webViewSignIn = preferences.getBoolean("webViewSignIn", false),
         feedActions = preferences.getString("feedActions", null)
             ?.split(',')
@@ -1676,6 +1687,7 @@ class OtterViewModel @JvmOverloads constructor(
             putBoolean("dimReadPosts", settings.dimReadPosts)
             putBoolean("showPostFlairs", settings.showPostFlairs)
             putBoolean("alwaysShowNsfw", settings.alwaysShowNsfw)
+            putBoolean("showRandomNsfwButton", settings.showRandomNsfwButton)
             putBoolean("webViewSignIn", settings.webViewSignIn)
             putString("feedActions", settings.feedActions.joinToString(",", transform = FeedAction::name))
             putSwipeActions("postSwipe", settings.postSwipeActions)

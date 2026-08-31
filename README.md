@@ -40,7 +40,7 @@ The project is open source under the [MIT License](LICENSE). Bug reports, though
 - Durable offline feed/comment cache and saved post drafts
 - Read posts stay dimmed across launches, with hide-read, mark-above-read, and clear-history controls
 - Case-insensitive keyword, community, and author filters
-- Optional always-on NSFW reveal, with spoilers still covered
+- Dedicated NSFW controls for automatic media reveal and the side-menu Random NSFW shortcut, with spoilers still covered
 - Dark, light, and system themes
 - Adjustable text size, thumbnail side, labels, read-state dimming, haptics, and gesture settings
 - Phone navigation plus a classic two-pane layout at 840dp and wider
