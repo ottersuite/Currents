@@ -10,20 +10,22 @@
 </p>
 
 <p align="center">
+  <a href="https://discord.gg/7hmp2mt3v2"><img alt="Join the OtterSuite Discord" src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
+  <a href="https://github.com/ottersuite/Currents"><img alt="Currents on GitHub" src="https://img.shields.io/badge/GitHub-View%20source-181717?style=for-the-badge&logo=github&logoColor=white"></a>
   <a href="https://github.com/ottersuite/Currents/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/ottersuite/Currents?style=for-the-badge&logo=github"></a>
   <a href="https://github.com/ottersuite/Currents/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/ottersuite/Currents/total?style=for-the-badge&logo=android"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/ottersuite/Currents?style=for-the-badge"></a>
-  <a href="https://discord.gg/7hmp2mt3v2"><img alt="Join the Currents Discord" src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
   <img alt="Android 8.0 or newer" src="https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white">
 </p>
 
 <p align="center">
-  <a href="https://github.com/ottersuite/Currents/releases/latest/download/Currents.apk"><strong>Download APK</strong></a>
+  <a href="https://discord.gg/7hmp2mt3v2"><strong>Join Discord</strong></a>
+  · <a href="https://github.com/ottersuite/Currents">GitHub</a>
+  · <a href="https://github.com/ottersuite/Currents/releases/latest/download/Currents.apk"><strong>Download APK</strong></a>
   · <a href="https://github.com/ottersuite/Currents/releases">Releases</a>
   · <a href="SETUP.md">Setup</a>
   · <a href="FAQ.md">FAQ</a>
   · <a href="CHANGELOG.md">Changelog</a>
-  · <a href="https://discord.gg/7hmp2mt3v2">Discord</a>
   · <a href="https://github.com/ottersuite/Currents/issues">Issues</a>
 </p>
 
