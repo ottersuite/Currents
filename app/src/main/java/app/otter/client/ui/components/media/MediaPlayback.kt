@@ -26,6 +26,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.ScrubbingModeParameters
 import androidx.media3.exoplayer.SeekParameters
@@ -36,6 +37,7 @@ import app.otter.client.model.MediaAsset
 import app.otter.client.model.MediaKind
 import app.otter.client.BuildConfig
 import app.otter.client.data.MediaCache
+import app.otter.client.ui.MediaQuality
 import coil3.compose.AsyncImage
 
 /**
@@ -51,11 +53,25 @@ fun rememberMediaPlayer(
     asset: MediaAsset,
     play: Boolean,
     muted: Boolean,
+    mediaQuality: MediaQuality = MediaQuality.Auto,
     onExhausted: () -> Unit = {},
 ): Player {
     val context = LocalContext.current
-    val player: Player = remember(asset) {
+    val player: Player = remember(asset, mediaQuality) {
+        val trackSelector = DefaultTrackSelector(context).apply {
+            parameters = buildUponParameters().apply {
+                when (mediaQuality) {
+                    MediaQuality.Low -> {
+                        setMaxVideoSize(854, 480)
+                        setMaxVideoBitrate(1_500_000)
+                    }
+                    MediaQuality.Auto -> Unit
+                    MediaQuality.High -> setForceHighestSupportedBitrate(true)
+                }
+            }.build()
+        }
         ExoPlayer.Builder(context)
+            .setTrackSelector(trackSelector)
             .setMediaSourceFactory(DefaultMediaSourceFactory(MediaCache.dataSourceFactory(context)))
             // Keep recently played samples available. Backward scrubs otherwise force the
             // network/extractor path to rebuild from an older keyframe on every drag update.

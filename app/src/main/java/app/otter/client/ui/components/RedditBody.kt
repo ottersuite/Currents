@@ -12,7 +12,7 @@ import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.text.TextStyle
 import app.otter.client.ui.theme.otterColors
 
 /**
@@ -25,11 +25,10 @@ import app.otter.client.ui.theme.otterColors
 @Composable
 fun RedditBody(
     body: String,
-    fontSize: TextUnit,
-    lineHeight: TextUnit,
     onOpenMedia: (String) -> Unit,
     onOpenLink: (String) -> Unit,
     modifier: Modifier = Modifier,
+    style: TextStyle = MaterialTheme.typography.bodyLarge,
 ) {
     val colors = MaterialTheme.otterColors
     val segments = remember(body) { parseRedditBody(body) }
@@ -70,8 +69,7 @@ fun RedditBody(
     Text(
         text = text,
         color = colors.textPrimary,
-        fontSize = fontSize,
-        lineHeight = lineHeight,
+        style = style,
         modifier = modifier,
     )
 }

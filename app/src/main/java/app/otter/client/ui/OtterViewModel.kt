@@ -27,13 +27,16 @@ import app.otter.client.data.oauth.RedditApiConfiguration
 import app.otter.client.data.oauth.RedditOAuthManager
 import app.otter.client.model.Comment
 import app.otter.client.model.Community
+import app.otter.client.model.CommunitySidebar
 import app.otter.client.model.MediaAsset
 import app.otter.client.model.MediaKind
 import app.otter.client.model.Post
 import app.otter.client.ui.screens.MediaViewerRequest
 import app.otter.client.model.RedditAccountState
+import app.otter.client.model.RedditMessage
 import app.otter.client.model.SubmissionKind
 import app.otter.client.model.VoteState
+import app.otter.client.model.UserProfile
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.CoroutineScope
@@ -64,6 +67,8 @@ import org.json.JSONObject
 
 enum class AppScreen {
     Feed,
+    Messages,
+    Profile,
     Search,
     Post,
     Settings,
@@ -76,6 +81,7 @@ enum class ThemeMode {
     System,
     Light,
     Dark,
+    Amoled,
 }
 
 enum class FeedPresentation {
@@ -107,6 +113,12 @@ enum class CommentSort(val label: String) {
     Controversial("Controversial"),
 }
 
+enum class MediaQuality(val label: String) {
+    Low("Low"),
+    Auto("Auto"),
+    High("High"),
+}
+
 enum class RedditConnectionState {
     Unconfigured,
     SignedOut,
@@ -118,8 +130,15 @@ enum class RedditConnectionState {
 data class OtterSettings(
     val themeMode: ThemeMode = ThemeMode.Dark,
     val feedPresentation: FeedPresentation = FeedPresentation.Compact,
+    val defaultPostSort: FeedSort = FeedSort.Best,
+    val defaultCommentSort: CommentSort = CommentSort.Best,
     val textScale: Float = 1f,
     val thumbnailsOnRight: Boolean = true,
+    val autoplayMedia: Boolean = true,
+    val prefetchMedia: Boolean = true,
+    val showThumbnails: Boolean = true,
+    val openLinksInApp: Boolean = true,
+    val mediaQuality: MediaQuality = MediaQuality.Auto,
     val swipeActions: Boolean = true,
     val haptics: Boolean = true,
     val dimReadPosts: Boolean = true,
@@ -218,6 +237,12 @@ class OtterViewModel @JvmOverloads constructor(
     val accountState = repositoryState
         .flatMapLatest { activeRepository -> activeRepository.accountState }
         .stateIn(viewModelScope, SharingStarted.Eagerly, repository.accountState.value)
+    val messages = repositoryState
+        .flatMapLatest { activeRepository -> activeRepository.messages }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, repository.messages.value)
+    val unreadMessageCount = messages
+        .map { inbox -> inbox.count(RedditMessage::isUnread) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
     /**
      * Comment flows per post, capped and evicted least-recently-used.
      *
@@ -243,6 +268,20 @@ class OtterViewModel @JvmOverloads constructor(
 
     private val _screen = MutableStateFlow(AppScreen.Feed)
     val screen = _screen.asStateFlow()
+    private val _profileUsername = MutableStateFlow("")
+    val profileUsername = _profileUsername.asStateFlow()
+    private val _profile = MutableStateFlow<UserProfile?>(null)
+    val profile = _profile.asStateFlow()
+    private val _profileLoading = MutableStateFlow(false)
+    val profileLoading = _profileLoading.asStateFlow()
+    private val _sidebarCommunityName = MutableStateFlow<String?>(null)
+    val sidebarCommunityName = _sidebarCommunityName.asStateFlow()
+    private val _communitySidebar = MutableStateFlow<CommunitySidebar?>(null)
+    val communitySidebar = _communitySidebar.asStateFlow()
+    private val _communitySidebarLoading = MutableStateFlow(false)
+    val communitySidebarLoading = _communitySidebarLoading.asStateFlow()
+    private var profileReturnScreen = AppScreen.Feed
+    private var postReturnScreen = AppScreen.Feed
 
     private val _selectedPostId = MutableStateFlow<String?>(null)
     val selectedPostId = _selectedPostId.asStateFlow()
@@ -250,10 +289,10 @@ class OtterViewModel @JvmOverloads constructor(
     private val _selectedFeed = MutableStateFlow("Home")
     val selectedFeed = _selectedFeed.asStateFlow()
 
-    private val _feedSort = MutableStateFlow(FeedSort.Best)
+    private val _feedSort = MutableStateFlow(loadDefaultPostSort())
     val feedSort = _feedSort.asStateFlow()
 
-    private val _commentSort = MutableStateFlow(CommentSort.Best)
+    private val _commentSort = MutableStateFlow(loadDefaultCommentSort())
     val commentSort = _commentSort.asStateFlow()
 
     private val _searchQuery = MutableStateFlow("")
@@ -307,6 +346,9 @@ class OtterViewModel @JvmOverloads constructor(
     private val _commentsLoading = MutableStateFlow(false)
     val commentsLoading = _commentsLoading.asStateFlow()
 
+    private val _messagesLoading = MutableStateFlow(false)
+    val messagesLoading = _messagesLoading.asStateFlow()
+
     private val _connectionState = MutableStateFlow(
         when {
             !repository.isLive -> RedditConnectionState.Unconfigured
@@ -328,6 +370,7 @@ class OtterViewModel @JvmOverloads constructor(
     private var adultPoolSeedJob: Job? = null
     private var feedJob: Job? = null
     private var commentJob: Job? = null
+    private var openMessagesAfterAuthorization = false
     private var feedRequestGeneration = 0
     private var commentRequestGeneration = 0
 
@@ -370,6 +413,7 @@ class OtterViewModel @JvmOverloads constructor(
                 }
             }
             if (repository.isLive && repository.accountState.value is RedditAccountState.SignedIn) {
+                launch { repository.refreshMessages() }
                 refreshInternal(showSuccessMessage = false)
             }
         }
@@ -420,9 +464,9 @@ class OtterViewModel @JvmOverloads constructor(
     private fun showFeed(feed: String, restoreCached: Boolean) {
         feedHasMorePages = true
         if (!restoreCached) {
-            // Every feed opens the way Reddit presents it by default; a sort chosen for one
-            // community should not silently follow you into the next.
-            _feedSort.value = FeedSort.Best
+            // A sort chosen for one community should not silently follow into the next. Each
+            // fresh feed starts with the user's persisted default instead.
+            _feedSort.value = _settings.value.defaultPostSort
         }
         _selectedFeed.value = feed
         _screen.value = AppScreen.Feed
@@ -650,17 +694,27 @@ class OtterViewModel @JvmOverloads constructor(
     }
 
     fun openPost(postId: String) {
+        postReturnScreen = if (_screen.value == AppScreen.Profile) AppScreen.Profile else AppScreen.Feed
         markPostRead(postId)
         // Opening a post is the best warning that its media is about to be tapped, so the
         // RedGifs lookup starts now rather than when the viewer is already on screen.
-        prefetchRedGifs(repository.post(postId)?.destinationUrl)
+        if (_settings.value.prefetchMedia) {
+            prefetchRedGifs(repository.post(postId)?.destinationUrl)
+        }
+        // Like feeds, a newly opened thread starts from the user's default rather than the
+        // last thread's temporary sort choice.
+        _commentSort.value = _settings.value.defaultCommentSort
         _selectedPostId.value = postId
         _collapsedCommentIds.value = emptySet()
         _screen.value = AppScreen.Post
         if (!usesRepositoryOverride && repository.comments(postId).value.isEmpty()) {
             viewModelScope.launch {
                 val cached = withContext(Dispatchers.IO) { offlineCache.comments(postId) }
-                if (_selectedPostId.value == postId && cached != null) {
+                if (
+                    _selectedPostId.value == postId &&
+                    cached != null &&
+                    enumValueOr(cached.sort, CommentSort.Best) == _commentSort.value
+                ) {
                     repository.restoreComments(postId, cached.comments)
                 }
             }
@@ -705,10 +759,115 @@ class OtterViewModel @JvmOverloads constructor(
             ?.drop(2)
             ?.takeIf(String::isNotEmpty)
 
-    fun openUserPosts(username: String) {
+    fun openUserProfile(username: String) {
         val trimmed = username.trim().removePrefix("u/").removePrefix("/u/")
         if (trimmed.isEmpty()) return
-        selectFeed("u/$trimmed")
+        profileReturnScreen = _screen.value.takeUnless { it == AppScreen.Profile } ?: AppScreen.Feed
+        _profileUsername.value = trimmed
+        _profile.value = null
+        _profileLoading.value = true
+        _screen.value = AppScreen.Profile
+        viewModelScope.launch {
+            repository.userProfile(trimmed)
+                .onSuccess { loaded ->
+                    if (_profileUsername.value.equals(trimmed, ignoreCase = true)) {
+                        _profile.value = loaded
+                    }
+                }
+                .onFailure { error ->
+                    _message.value = error.message ?: "Profile could not be loaded"
+                }
+            if (_profileUsername.value.equals(trimmed, ignoreCase = true)) {
+                _profileLoading.value = false
+            }
+        }
+    }
+
+    fun openCommunitySidebar(communityName: String) {
+        val normalized = communityName.trim().removePrefix("r/")
+        if (normalized.isBlank()) return
+        _sidebarCommunityName.value = normalized
+        _communitySidebar.value = null
+        _communitySidebarLoading.value = true
+        viewModelScope.launch {
+            repository.communitySidebar(normalized)
+                .onSuccess { loaded ->
+                    if (_sidebarCommunityName.value.equals(normalized, ignoreCase = true)) {
+                        _communitySidebar.value = loaded
+                    }
+                }
+                .onFailure { error ->
+                    _message.value = error.message ?: "Community sidebar could not be loaded"
+                }
+            if (_sidebarCommunityName.value.equals(normalized, ignoreCase = true)) {
+                _communitySidebarLoading.value = false
+            }
+        }
+    }
+
+    fun dismissCommunitySidebar() {
+        _sidebarCommunityName.value = null
+        _communitySidebar.value = null
+        _communitySidebarLoading.value = false
+    }
+
+    fun openMessages() {
+        if (repository.accountState.value !is RedditAccountState.SignedIn) {
+            _message.value = "Connect your Reddit account to view messages"
+            return
+        }
+        _screen.value = AppScreen.Messages
+        refreshMessages(markUnreadAsRead = true)
+    }
+
+    /**
+     * Remembers why an already-connected account is authorizing again.
+     *
+     * Accounts connected before inbox support do not have Reddit's `privatemessages` scope.
+     * Re-running OAuth is the only way Reddit can add it; after the callback we should finish
+     * the action the user actually chose instead of dropping them back on the feed.
+     */
+    fun requestMessagesPermissionUpgrade() {
+        openMessagesAfterAuthorization = true
+        _message.value = "Approve Reddit's Messages permission once to open your inbox"
+    }
+
+    fun refreshMessages() = refreshMessages(markUnreadAsRead = _screen.value == AppScreen.Messages)
+
+    private fun refreshMessages(markUnreadAsRead: Boolean) {
+        if (_messagesLoading.value) return
+        if (repository.accountState.value !is RedditAccountState.SignedIn) return
+        viewModelScope.launch {
+            _messagesLoading.value = true
+            repository.refreshMessages()
+                .onSuccess {
+                    if (markUnreadAsRead) {
+                        val unread = repository.messages.value
+                            .filter(RedditMessage::isUnread)
+                            .map(RedditMessage::fullname)
+                        if (unread.isNotEmpty()) repository.markMessagesRead(unread)
+                    }
+                }
+                .onFailure { error ->
+                    handleAuthenticatedFailure(error, "Messages could not be loaded")
+                }
+            _messagesLoading.value = false
+        }
+    }
+
+    fun replyToMessage(message: RedditMessage, body: String) {
+        if (body.isBlank()) return
+        if (repository.accountState.value !is RedditAccountState.SignedIn) {
+            _message.value = "Connect your Reddit account before replying"
+            return
+        }
+        viewModelScope.launch {
+            repository.replyToMessage(message.fullname, body)
+                .onSuccess { _message.value = "Reply sent to u/${message.author}" }
+                .onFailure { error ->
+                    handleAuthenticatedFailure(error, "Reply could not be sent")
+                }
+        }
     }
 
     fun openAdvancedSettings() {
@@ -726,8 +885,12 @@ class OtterViewModel @JvmOverloads constructor(
     fun navigateBack(): Boolean = when (_screen.value) {
         // At the top level, back retraces the feeds this session visited before it leaves.
         AppScreen.Feed -> returnToPreviousFeed()
-        AppScreen.Search -> {
+        AppScreen.Search, AppScreen.Messages -> {
             _screen.value = AppScreen.Feed
+            true
+        }
+        AppScreen.Profile -> {
+            _screen.value = profileReturnScreen
             true
         }
         // Submenus are reached from Settings, so back returns there rather than to the feed.
@@ -735,7 +898,11 @@ class OtterViewModel @JvmOverloads constructor(
             _screen.value = AppScreen.Settings
             true
         }
-        AppScreen.Post, AppScreen.Settings, AppScreen.About -> {
+        AppScreen.Post -> {
+            _screen.value = postReturnScreen
+            true
+        }
+        AppScreen.Settings, AppScreen.About -> {
             _screen.value = AppScreen.Feed
             true
         }
@@ -793,6 +960,7 @@ class OtterViewModel @JvmOverloads constructor(
                 )
             }
             .onFailure { error ->
+                openMessagesAfterAuthorization = false
                 _message.value = error.message ?: "Reddit sign-in could not start"
             }
             .getOrNull()
@@ -810,6 +978,7 @@ class OtterViewModel @JvmOverloads constructor(
         get() = _redditApiConfiguration.value.normalized().redirectUri
 
     fun cancelRedditSignIn(message: String) {
+        openMessagesAfterAuthorization = false
         repository.cancelAccountAuthorization()
         _connectionState.value = if (repository.isLive) {
             RedditConnectionState.SignedOut
@@ -826,8 +995,15 @@ class OtterViewModel @JvmOverloads constructor(
                     .onSuccess { account ->
                         _message.value = "Connected as u/${account.username}"
                         refreshInternal(showSuccessMessage = false)
+                        if (openMessagesAfterAuthorization) {
+                            openMessagesAfterAuthorization = false
+                            openMessages()
+                        } else {
+                            repository.refreshMessages()
+                        }
                     }
                     .onFailure { error ->
+                        openMessagesAfterAuthorization = false
                         _message.value = error.message ?: "Reddit sign-in failed"
                     }
             }
@@ -835,6 +1011,7 @@ class OtterViewModel @JvmOverloads constructor(
     }
 
     fun disconnectRedditAccount() {
+        openMessagesAfterAuthorization = false
         invalidateReadRequests()
         viewModelScope.launch {
             apiConfigurationMutex.withLock {
@@ -1145,12 +1322,14 @@ class OtterViewModel @JvmOverloads constructor(
                 // that has plenty more to give.
                 feedHasMorePages = true
                 cacheCurrentFeed()
-                MediaCache.prefetch(
-                    getApplication(),
-                    posts.value.asSequence()
-                        .mapNotNull { it.media?.first?.playbackUrls?.firstOrNull() }
-                        .asIterable(),
-                )
+                if (_settings.value.prefetchMedia) {
+                    MediaCache.prefetch(
+                        getApplication(),
+                        posts.value.asSequence()
+                            .mapNotNull { it.media?.first?.playbackUrls?.firstOrNull() }
+                            .asIterable(),
+                    )
+                }
                 if (showSuccessMessage) {
                     _message.value = "Reddit feed refreshed"
                 }
@@ -1340,6 +1519,12 @@ class OtterViewModel @JvmOverloads constructor(
 
     fun updateThemeMode(mode: ThemeMode) = updateSettings { copy(themeMode = mode) }
 
+    fun updateDefaultPostSort(sort: FeedSort) =
+        updateSettings { copy(defaultPostSort = sort) }
+
+    fun updateDefaultCommentSort(sort: CommentSort) =
+        updateSettings { copy(defaultCommentSort = sort) }
+
     fun updateFeedPresentation(value: FeedPresentation) =
         updateSettings { copy(feedPresentation = value) }
 
@@ -1347,6 +1532,16 @@ class OtterViewModel @JvmOverloads constructor(
         updateSettings { copy(textScale = value.coerceIn(.85f, 1.3f)) }
 
     fun toggleThumbnailsSide() = updateSettings { copy(thumbnailsOnRight = !thumbnailsOnRight) }
+
+    fun toggleAutoplayMedia() = updateSettings { copy(autoplayMedia = !autoplayMedia) }
+
+    fun togglePrefetchMedia() = updateSettings { copy(prefetchMedia = !prefetchMedia) }
+
+    fun toggleShowThumbnails() = updateSettings { copy(showThumbnails = !showThumbnails) }
+
+    fun toggleOpenLinksInApp() = updateSettings { copy(openLinksInApp = !openLinksInApp) }
+
+    fun updateMediaQuality(value: MediaQuality) = updateSettings { copy(mediaQuality = value) }
 
     fun toggleSwipeActions() = updateSettings { copy(swipeActions = !swipeActions) }
 
@@ -1643,6 +1838,16 @@ class OtterViewModel @JvmOverloads constructor(
         )
     }.getOrDefault(FeedTimeframe.Today)
 
+    private fun loadDefaultPostSort(): FeedSort = enumValueOr(
+        preferences.getString("defaultPostSort", FeedSort.Best.name).orEmpty(),
+        FeedSort.Best,
+    )
+
+    private fun loadDefaultCommentSort(): CommentSort = enumValueOr(
+        preferences.getString("defaultCommentSort", CommentSort.Best.name).orEmpty(),
+        CommentSort.Best,
+    )
+
     private fun loadSettings(): OtterSettings = OtterSettings(
         themeMode = runCatching {
             ThemeMode.valueOf(preferences.getString("theme", ThemeMode.Dark.name).orEmpty())
@@ -1652,8 +1857,18 @@ class OtterViewModel @JvmOverloads constructor(
                 preferences.getString("presentation", FeedPresentation.Compact.name).orEmpty(),
             )
         }.getOrDefault(FeedPresentation.Compact),
+        defaultPostSort = loadDefaultPostSort(),
+        defaultCommentSort = loadDefaultCommentSort(),
         textScale = preferences.getFloat("textScale", 1f),
         thumbnailsOnRight = preferences.getBoolean("thumbnailsOnRight", true),
+        autoplayMedia = preferences.getBoolean("autoplayMedia", true),
+        prefetchMedia = preferences.getBoolean("prefetchMedia", true),
+        showThumbnails = preferences.getBoolean("showThumbnails", true),
+        openLinksInApp = preferences.getBoolean("openLinksInApp", true),
+        mediaQuality = enumValueOr(
+            preferences.getString("mediaQuality", MediaQuality.Auto.name).orEmpty(),
+            MediaQuality.Auto,
+        ),
         swipeActions = preferences.getBoolean("swipeActions", true),
         haptics = preferences.getBoolean("haptics", true),
         dimReadPosts = preferences.getBoolean("dimReadPosts", true),
@@ -1680,8 +1895,15 @@ class OtterViewModel @JvmOverloads constructor(
         preferences.edit {
             putString("theme", settings.themeMode.name)
             putString("presentation", settings.feedPresentation.name)
+            putString("defaultPostSort", settings.defaultPostSort.name)
+            putString("defaultCommentSort", settings.defaultCommentSort.name)
             putFloat("textScale", settings.textScale)
             putBoolean("thumbnailsOnRight", settings.thumbnailsOnRight)
+            putBoolean("autoplayMedia", settings.autoplayMedia)
+            putBoolean("prefetchMedia", settings.prefetchMedia)
+            putBoolean("showThumbnails", settings.showThumbnails)
+            putBoolean("openLinksInApp", settings.openLinksInApp)
+            putString("mediaQuality", settings.mediaQuality.name)
             putBoolean("swipeActions", settings.swipeActions)
             putBoolean("haptics", settings.haptics)
             putBoolean("dimReadPosts", settings.dimReadPosts)

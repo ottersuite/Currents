@@ -2,10 +2,12 @@ package app.otter.client.data
 
 import app.otter.client.model.Comment
 import app.otter.client.model.Community
+import app.otter.client.model.CommunitySidebar
 import app.otter.client.model.Post
 import app.otter.client.model.PostType
 import app.otter.client.model.SubmissionKind
 import app.otter.client.model.VoteState
+import app.otter.client.model.UserProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,6 +44,30 @@ open class InMemoryRedditRepository(
 
     override fun comments(postId: String): StateFlow<List<Comment>> = synchronized(lock) {
         commentFlows.getOrPut(postId) { MutableStateFlow(emptyList()) }.asStateFlow()
+    }
+
+    override suspend fun userProfile(username: String): Result<UserProfile> = runCatching {
+        val normalized = username.trim().removePrefix("u/").removePrefix("/u/")
+        require(normalized.isNotBlank()) { "Username cannot be blank" }
+        UserProfile(
+            username = normalized,
+            displayName = normalized,
+            description = "Recent activity available offline",
+            recentPosts = feed.value.filter { it.author.equals(normalized, ignoreCase = true) },
+        )
+    }
+
+    override suspend fun communitySidebar(communityName: String): Result<CommunitySidebar> = runCatching {
+        val normalized = communityName.trim().removePrefix("r/")
+        val community = communities.value.firstOrNull {
+            it.name.equals(normalized, ignoreCase = true)
+        } ?: throw IllegalArgumentException("Unknown community: $communityName")
+        CommunitySidebar(
+            communityName = community.name,
+            title = community.displayName,
+            description = "Community information is unavailable while browsing offline.",
+            memberCount = community.memberCount,
+        )
     }
 
     open override fun submitPost(

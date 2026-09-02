@@ -14,6 +14,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.TextUnit
 
 val OtterBlue = Color(0xFF4EA7F5)
 val OtterOrange = Color(0xFFFF6A2B)
@@ -53,6 +54,25 @@ private val DarkOtterColors = OtterColors(
     downvote = OtterPeriwinkle,
     saved = Color(0xFFF1C75B),
     spoiler = Color(0xFF313840),
+    mediaBlue = Color(0xFF0C5F91),
+)
+
+/** True-black surfaces for OLED displays, kept separate from the softer gray dark theme. */
+private val AmoledOtterColors = OtterColors(
+    canvas = Color.Black,
+    surface = Color.Black,
+    surfaceRaised = Color(0xFF0B0B0B),
+    surfaceGlass = Color(0xF2070707),
+    drawerSurface = Color.Black,
+    divider = Color(0xFF242424),
+    textPrimary = Color(0xFFF5F5F5),
+    textSecondary = Color(0xFFAAAAAA),
+    textTertiary = Color(0xFF747474),
+    accent = Color(0xFF5CB2FF),
+    upvote = OtterOrange,
+    downvote = OtterPeriwinkle,
+    saved = Color(0xFFF1C75B),
+    spoiler = Color(0xFF222222),
     mediaBlue = Color(0xFF0C5F91),
 )
 
@@ -163,16 +183,53 @@ private val OtterTypography = Typography(
     ),
 )
 
+private fun TextUnit.scaledBy(scale: Float): TextUnit =
+    if (this == TextUnit.Unspecified) this else this * scale
+
+private fun TextStyle.scaledBy(scale: Float): TextStyle = copy(
+    fontSize = fontSize.scaledBy(scale),
+    lineHeight = lineHeight.scaledBy(scale),
+    letterSpacing = letterSpacing.scaledBy(scale),
+)
+
+/** Scales every Material type role so screens cannot accidentally opt out of accessibility. */
+internal fun scaledTypography(scale: Float): Typography {
+    val value = scale.coerceIn(.85f, 1.3f)
+    return OtterTypography.copy(
+        displayLarge = OtterTypography.displayLarge.scaledBy(value),
+        displayMedium = OtterTypography.displayMedium.scaledBy(value),
+        displaySmall = OtterTypography.displaySmall.scaledBy(value),
+        headlineLarge = OtterTypography.headlineLarge.scaledBy(value),
+        headlineMedium = OtterTypography.headlineMedium.scaledBy(value),
+        headlineSmall = OtterTypography.headlineSmall.scaledBy(value),
+        titleLarge = OtterTypography.titleLarge.scaledBy(value),
+        titleMedium = OtterTypography.titleMedium.scaledBy(value),
+        titleSmall = OtterTypography.titleSmall.scaledBy(value),
+        bodyLarge = OtterTypography.bodyLarge.scaledBy(value),
+        bodyMedium = OtterTypography.bodyMedium.scaledBy(value),
+        bodySmall = OtterTypography.bodySmall.scaledBy(value),
+        labelLarge = OtterTypography.labelLarge.scaledBy(value),
+        labelMedium = OtterTypography.labelMedium.scaledBy(value),
+        labelSmall = OtterTypography.labelSmall.scaledBy(value),
+    )
+}
+
 @Composable
 fun OtterTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    amoledTheme: Boolean = false,
+    textScale: Float = 1f,
     content: @Composable () -> Unit,
 ) {
-    val colors = if (darkTheme) DarkOtterColors else LightOtterColors
+    val colors = when {
+        amoledTheme -> AmoledOtterColors
+        darkTheme -> DarkOtterColors
+        else -> LightOtterColors
+    }
     androidx.compose.runtime.CompositionLocalProvider(LocalOtterColors provides colors) {
         MaterialTheme(
             colorScheme = materialColors(colors, darkTheme),
-            typography = OtterTypography,
+            typography = scaledTypography(textScale),
             content = content,
         )
     }

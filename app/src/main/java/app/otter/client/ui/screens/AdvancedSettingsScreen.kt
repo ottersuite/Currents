@@ -20,7 +20,9 @@ import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Smartphone
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +63,7 @@ fun AdvancedSettingsScreen(
     val statusBarHeight = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
     val navigationBarHeight = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
     var showRedditApiConfiguration by rememberSaveable { mutableStateOf(false) }
+    var showDisconnectConfirmation by rememberSaveable { mutableStateOf(false) }
 
     LazyColumn(
         contentPadding = PaddingValues(
@@ -151,7 +154,7 @@ fun AdvancedSettingsScreen(
                 ) {
                     when (accountState) {
                         RedditAccountState.SignedOut -> onConnectAccount()
-                        is RedditAccountState.SignedIn -> onDisconnectAccount()
+                        is RedditAccountState.SignedIn -> showDisconnectConfirmation = true
                         RedditAccountState.Authorizing -> onMessage(
                             if (settings.webViewSignIn) {
                                 "Finish Reddit authorization in the in-app page"
@@ -196,6 +199,38 @@ fun AdvancedSettingsScreen(
             onReset = {
                 onResetRedditApiConfiguration().also { reset ->
                     if (reset) showRedditApiConfiguration = false
+                }
+            },
+        )
+    }
+
+    if (showDisconnectConfirmation) {
+        val username = (accountState as? RedditAccountState.SignedIn)?.account?.username
+        AlertDialog(
+            onDismissRequest = { showDisconnectConfirmation = false },
+            title = { Text("Disconnect Reddit account?") },
+            text = {
+                Text(
+                    if (username == null) {
+                        "Currents will remove the Reddit session stored on this device."
+                    } else {
+                        "Currents will remove the session for u/$username from this device."
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDisconnectConfirmation = false
+                        onDisconnectAccount()
+                    },
+                ) {
+                    Text("Disconnect", color = colors.upvote)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDisconnectConfirmation = false }) {
+                    Text("Cancel")
                 }
             },
         )

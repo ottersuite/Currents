@@ -64,7 +64,6 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.Placeholder
@@ -83,6 +82,7 @@ import app.otter.client.model.PostPreview
 import app.otter.client.model.PostType
 import app.otter.client.model.VoteState
 import app.otter.client.ui.FeedPresentation
+import app.otter.client.ui.MediaQuality
 import app.otter.client.ui.SwipeActionConfig
 import app.otter.client.ui.theme.otterColors
 import coil3.compose.AsyncImage
@@ -121,7 +121,9 @@ fun FeedPost(
     post: Post,
     presentation: FeedPresentation,
     thumbnailsOnRight: Boolean,
-    textScale: Float,
+    showThumbnails: Boolean,
+    autoplayMedia: Boolean,
+    mediaQuality: MediaQuality,
     dimRead: Boolean,
     showFlairs: Boolean,
     swipeEnabled: Boolean,
@@ -167,8 +169,10 @@ fun FeedPost(
                     post = post,
                     dimmed = dimRead && post.isRead,
                     thumbnailsOnRight = thumbnailsOnRight,
+                    showThumbnails = showThumbnails,
+                    autoplayMedia = autoplayMedia,
+                    mediaQuality = mediaQuality,
                     onOpenMedia = onOpenMedia,
-                    textScale = textScale,
                     showFlairs = showFlairs,
                     hapticsEnabled = hapticsEnabled,
                     selected = isSelected,
@@ -183,7 +187,9 @@ fun FeedPost(
                     post = post,
                     dimmed = dimRead && post.isRead,
                     onOpenMedia = onOpenMedia,
-                    textScale = textScale,
+                    showThumbnails = showThumbnails,
+                    autoplayMedia = autoplayMedia,
+                    mediaQuality = mediaQuality,
                     showFlairs = showFlairs,
                     hapticsEnabled = hapticsEnabled,
                     selected = isSelected,
@@ -203,8 +209,10 @@ private fun CompactPost(
     post: Post,
     dimmed: Boolean,
     thumbnailsOnRight: Boolean,
+    showThumbnails: Boolean,
+    autoplayMedia: Boolean,
+    mediaQuality: MediaQuality,
     onOpenMedia: () -> Unit,
-    textScale: Float,
     showFlairs: Boolean,
     hapticsEnabled: Boolean,
     selected: Boolean,
@@ -224,7 +232,7 @@ private fun CompactPost(
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
         Row(verticalAlignment = Alignment.Top) {
-            if (!thumbnailsOnRight && post.preview != null) {
+            if (showThumbnails && !thumbnailsOnRight && post.preview != null) {
                 PostArtwork(
                     preview = post.preview,
                     type = post.type,
@@ -232,6 +240,8 @@ private fun CompactPost(
                     warningLabel = warningLabel,
                     peekMedia = post.media,
                     hapticsEnabled = hapticsEnabled,
+                    autoplayPeek = autoplayMedia,
+                    mediaQuality = mediaQuality,
                     onReveal = onRevealMedia,
                     onOpenMedia = onOpenMedia.takeIf { post.media != null },
                     modifier = Modifier.size(72.dp),
@@ -245,12 +255,11 @@ private fun CompactPost(
                 TitleWithFlair(
                     post = post,
                     showFlairs = showFlairs,
-                    textScale = textScale,
                     dimmed = dimmed,
                 )
             }
 
-            if (thumbnailsOnRight && post.preview != null) {
+            if (showThumbnails && thumbnailsOnRight && post.preview != null) {
                 Spacer(Modifier.width(11.dp))
                 PostArtwork(
                     preview = post.preview,
@@ -259,6 +268,8 @@ private fun CompactPost(
                     warningLabel = warningLabel,
                     peekMedia = post.media,
                     hapticsEnabled = hapticsEnabled,
+                    autoplayPeek = autoplayMedia,
+                    mediaQuality = mediaQuality,
                     onReveal = onRevealMedia,
                     onOpenMedia = onOpenMedia.takeIf { post.media != null },
                     modifier = Modifier.size(72.dp),
@@ -278,7 +289,9 @@ private fun LargePreviewPost(
     post: Post,
     dimmed: Boolean,
     onOpenMedia: () -> Unit,
-    textScale: Float,
+    showThumbnails: Boolean,
+    autoplayMedia: Boolean,
+    mediaQuality: MediaQuality,
     showFlairs: Boolean,
     hapticsEnabled: Boolean,
     selected: Boolean,
@@ -316,12 +329,11 @@ private fun LargePreviewPost(
         Text(
             text = post.title,
             color = colors.textPrimary,
-            fontSize = (16f * textScale).sp,
-            lineHeight = (21f * textScale).sp,
+            style = MaterialTheme.typography.bodyLarge,
             fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(horizontal = 13.dp, vertical = 7.dp),
         )
-        post.preview?.let { preview ->
+        post.preview?.takeIf { showThumbnails }?.let { preview ->
             PostArtwork(
                 preview = preview,
                 type = post.type,
@@ -329,6 +341,8 @@ private fun LargePreviewPost(
                 warningLabel = warningLabel,
                 peekMedia = post.media,
                 hapticsEnabled = hapticsEnabled,
+                autoplayPeek = autoplayMedia,
+                mediaQuality = mediaQuality,
                 onReveal = onRevealMedia,
                 onOpenMedia = onOpenMedia.takeIf { post.media != null },
                 modifier = Modifier
@@ -366,16 +380,15 @@ private fun CommunityDot(post: Post) {
 private fun TitleWithFlair(
     post: Post,
     showFlairs: Boolean,
-    textScale: Float,
     dimmed: Boolean = false,
 ) {
     val colors = MaterialTheme.otterColors
     val density = LocalDensity.current
     val measurer = rememberTextMeasurer()
     val flair = post.flairText?.takeIf { showFlairs && it.isNotBlank() }
-    val flairStyle = TextStyle(fontSize = (10.5f * textScale).sp)
+    val flairStyle = MaterialTheme.typography.labelSmall
 
-    val flairSize = remember(flair, textScale) {
+    val flairSize = remember(flair, flairStyle) {
         flair?.let { measurer.measure(AnnotatedString(it), flairStyle).size }
     }
 
@@ -442,8 +455,7 @@ private fun TitleWithFlair(
         inlineContent = inlineContent,
         // Read posts recede by going grey, while the thumbnail stays at full strength.
         color = if (dimmed) colors.textTertiary else colors.textPrimary,
-        fontSize = (15.2f * textScale).sp,
-        lineHeight = (19.6f * textScale).sp,
+        style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Medium,
         maxLines = 3,
         overflow = TextOverflow.Ellipsis,
@@ -668,6 +680,8 @@ fun PostArtwork(
     warningLabel: String? = null,
     peekMedia: PostMedia? = null,
     hapticsEnabled: Boolean = true,
+    autoplayPeek: Boolean = true,
+    mediaQuality: MediaQuality = MediaQuality.Auto,
     onReveal: () -> Unit = {},
     onOpenMedia: (() -> Unit)? = null,
 ) {
@@ -803,7 +817,14 @@ fun PostArtwork(
         )
     }
 
-    if (peeking) MediaPeek(preview = preview, media = peekMedia)
+    if (peeking) {
+        MediaPeek(
+            preview = preview,
+            media = peekMedia,
+            autoplay = autoplayPeek,
+            mediaQuality = mediaQuality,
+        )
+    }
 }
 
 @Composable

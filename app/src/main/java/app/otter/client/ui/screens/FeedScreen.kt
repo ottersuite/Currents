@@ -46,6 +46,7 @@ import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.DoneAll
@@ -138,6 +139,7 @@ fun FeedScreen(
     modifier: Modifier = Modifier,
     community: Community? = null,
     onToggleCommunitySubscription: (Community) -> Unit = {},
+    onViewCommunitySidebar: (Community) -> Unit = {},
     onShowSaved: () -> Unit = {},
     onMarkRead: (Collection<String>) -> Unit = {},
     listState: LazyListState = rememberLazyListState(),
@@ -273,6 +275,7 @@ fun FeedScreen(
                 item(key = "community-header-${selectedCommunity.name}") {
                     CommunityHeader(
                         community = selectedCommunity,
+                        onViewSidebar = { onViewCommunitySidebar(selectedCommunity) },
                         onToggleSubscription = {
                             onToggleCommunitySubscription(selectedCommunity)
                         },
@@ -306,7 +309,9 @@ fun FeedScreen(
                         post = post,
                         presentation = settings.feedPresentation,
                         thumbnailsOnRight = settings.thumbnailsOnRight,
-                        textScale = settings.textScale,
+                        showThumbnails = settings.showThumbnails,
+                        autoplayMedia = settings.autoplayMedia,
+                        mediaQuality = settings.mediaQuality,
                         dimRead = settings.dimReadPosts,
                         showFlairs = settings.showPostFlairs,
                         swipeEnabled = settings.swipeActions,
@@ -399,6 +404,7 @@ fun FeedScreen(
 private fun CommunityHeader(
     community: Community,
     onToggleSubscription: () -> Unit,
+    onViewSidebar: () -> Unit,
 ) {
     val colors = MaterialTheme.otterColors
     Row(
@@ -444,6 +450,13 @@ private fun CommunityHeader(
                 color = colors.textTertiary,
                 style = MaterialTheme.typography.labelMedium,
                 maxLines = 1,
+            )
+        }
+        IconButton(onClick = onViewSidebar) {
+            Icon(
+                Icons.Outlined.Info,
+                contentDescription = "View ${community.name} sidebar",
+                tint = colors.textSecondary,
             )
         }
         Surface(

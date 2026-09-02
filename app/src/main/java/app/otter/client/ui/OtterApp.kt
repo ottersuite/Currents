@@ -38,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
@@ -46,14 +47,17 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.otter.client.model.Comment
 import app.otter.client.model.RedditAccountState
 import app.otter.client.ui.components.OtterSideMenu
+import app.otter.client.ui.components.CommunitySidebarSheet
 import app.otter.client.ui.components.PostComposerSheet
 import app.otter.client.ui.components.ReplyComposerSheet
 import app.otter.client.ui.screens.AboutScreen
 import app.otter.client.ui.screens.FeedScreen
 import app.otter.client.ui.screens.AdvancedSettingsScreen
 import app.otter.client.ui.screens.MediaViewerScreen
+import app.otter.client.ui.screens.MessagesScreen
 import app.otter.client.ui.screens.NsfwSettingsScreen
 import app.otter.client.ui.screens.PostScreen
+import app.otter.client.ui.screens.ProfileScreen
 import app.otter.client.ui.screens.SearchScreen
 import app.otter.client.ui.screens.SettingsScreen
 import app.otter.client.ui.theme.OtterTheme
@@ -94,7 +98,7 @@ fun OtterApp(
     val darkTheme = when (settings.themeMode) {
         ThemeMode.System -> systemDark
         ThemeMode.Light -> false
-        ThemeMode.Dark -> true
+        ThemeMode.Dark, ThemeMode.Amoled -> true
     }
     val context = LocalContext.current
     val view = LocalView.current
@@ -106,7 +110,11 @@ fun OtterApp(
         }
     }
 
-    OtterTheme(darkTheme = darkTheme) {
+    OtterTheme(
+        darkTheme = darkTheme,
+        amoledTheme = settings.themeMode == ThemeMode.Amoled,
+        textScale = settings.textScale,
+    ) {
         OtterAppContent(
             viewModel = viewModel,
             settings = settings,
@@ -122,6 +130,7 @@ private fun OtterAppContent(
     onLaunchRedditAuthorization: ((String, String) -> Unit)?,
 ) {
     val colors = MaterialTheme.otterColors
+    val smallestScreenWidthDp = LocalConfiguration.current.smallestScreenWidthDp
     val screen by viewModel.screen.collectAsStateWithLifecycle()
     val mediaViewer by viewModel.mediaViewer.collectAsStateWithLifecycle()
     val canReturnToPreviousFeed by viewModel.canReturnToPreviousFeed.collectAsStateWithLifecycle()
@@ -142,6 +151,15 @@ private fun OtterAppContent(
     val refreshing by viewModel.refreshing.collectAsStateWithLifecycle()
     val loadingMore by viewModel.loadingMore.collectAsStateWithLifecycle()
     val commentsLoading by viewModel.commentsLoading.collectAsStateWithLifecycle()
+    val messages by viewModel.messages.collectAsStateWithLifecycle()
+    val unreadMessageCount by viewModel.unreadMessageCount.collectAsStateWithLifecycle()
+    val messagesLoading by viewModel.messagesLoading.collectAsStateWithLifecycle()
+    val profileUsername by viewModel.profileUsername.collectAsStateWithLifecycle()
+    val profile by viewModel.profile.collectAsStateWithLifecycle()
+    val profileLoading by viewModel.profileLoading.collectAsStateWithLifecycle()
+    val sidebarCommunityName by viewModel.sidebarCommunityName.collectAsStateWithLifecycle()
+    val communitySidebar by viewModel.communitySidebar.collectAsStateWithLifecycle()
+    val communitySidebarLoading by viewModel.communitySidebarLoading.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val accountState by viewModel.accountState.collectAsStateWithLifecycle()
     val redditApiConfiguration by viewModel.redditApiConfiguration.collectAsStateWithLifecycle()
@@ -150,8 +168,9 @@ private fun OtterAppContent(
 
     // Remembered rather than rescanned: this composable recomposes on any of the states above,
     // and the scan is over the whole loaded feed, which is every page fetched so far.
-    val selectedPost = remember(posts, selectedPostId) {
+    val selectedPost = remember(posts, profile, selectedPostId) {
         posts.firstOrNull { it.id == selectedPostId }
+            ?: profile?.recentPosts?.firstOrNull { it.id == selectedPostId }
     }
     val emptyComments = remember { MutableStateFlow(emptyList<Comment>()) }
     val commentsFlow = remember(selectedPostId) {
@@ -172,6 +191,7 @@ private fun OtterAppContent(
 
     var drawerVisible by rememberSaveable { mutableStateOf(false) }
     var replyTarget by remember { mutableStateOf<ReplyTarget?>(null) }
+    var messageReplyTarget by remember { mutableStateOf<app.otter.client.model.RedditMessage?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     val feedListState = rememberLazyListState()
     val connectRedditAccount: () -> Unit = {
@@ -214,7 +234,11 @@ private fun OtterAppContent(
 
     Box(modifier = Modifier.fillMaxSize().background(colors.canvas)) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
-            val useTwoPanes = maxWidth >= 840.dp
+            val useTwoPanes = shouldUseTwoPaneLayout(
+                widthDp = maxWidth.value,
+                heightDp = maxHeight.value,
+                smallestWidthDp = smallestScreenWidthDp,
+            )
 
             when (screen) {
                 AppScreen.Feed -> FeedScreen(
@@ -235,6 +259,7 @@ private fun OtterAppContent(
                     settings = settings,
                     community = selectedCommunity,
                     onToggleCommunitySubscription = viewModel::toggleCommunitySubscription,
+                    onViewCommunitySidebar = { viewModel.openCommunitySidebar(it.name) },
                     onOpenDrawer = { drawerVisible = true },
                     onOpenSearch = viewModel::openSearch,
                     onToggleSearch = viewModel::toggleSearch,
@@ -280,6 +305,7 @@ private fun OtterAppContent(
                                     settings = settings,
                                     community = selectedCommunity,
                                     onToggleCommunitySubscription = viewModel::toggleCommunitySubscription,
+                                    onViewCommunitySidebar = { viewModel.openCommunitySidebar(it.name) },
                                     onOpenDrawer = { drawerVisible = true },
                     onOpenSearch = viewModel::openSearch,
                                     onToggleSearch = viewModel::toggleSearch,
@@ -346,6 +372,23 @@ private fun OtterAppContent(
                     LaunchedEffect(Unit) { viewModel.navigateBack() }
                 }
 
+                AppScreen.Messages -> MessagesScreen(
+                    messages = messages,
+                    isLoading = messagesLoading,
+                    onRefresh = viewModel::refreshMessages,
+                    onBack = { viewModel.navigateBack() },
+                    onReply = { messageReplyTarget = it },
+                    onOpenUser = viewModel::openUserProfile,
+                )
+
+                AppScreen.Profile -> ProfileScreen(
+                    username = profileUsername,
+                    profile = profile,
+                    loading = profileLoading,
+                    onBack = { viewModel.navigateBack() },
+                    onOpenPost = viewModel::openPost,
+                )
+
                 AppScreen.Settings -> SettingsScreen(
                     settings = settings,
                     connectionState = connectionState,
@@ -354,7 +397,14 @@ private fun OtterAppContent(
                     onOpenAdvanced = viewModel::openAdvancedSettings,
                     onThemeModeChange = viewModel::updateThemeMode,
                     onPresentationChange = viewModel::updateFeedPresentation,
+                    onDefaultPostSortChange = viewModel::updateDefaultPostSort,
+                    onDefaultCommentSortChange = viewModel::updateDefaultCommentSort,
                     onTextScaleChange = viewModel::updateTextScale,
+                    onToggleAutoplayMedia = viewModel::toggleAutoplayMedia,
+                    onTogglePrefetchMedia = viewModel::togglePrefetchMedia,
+                    onToggleShowThumbnails = viewModel::toggleShowThumbnails,
+                    onToggleOpenLinksInApp = viewModel::toggleOpenLinksInApp,
+                    onMediaQualityChange = viewModel::updateMediaQuality,
                     onToggleThumbnailSide = viewModel::toggleThumbnailsSide,
                     onToggleSwipeActions = viewModel::toggleSwipeActions,
                     onToggleHaptics = viewModel::toggleHaptics,
@@ -405,11 +455,14 @@ private fun OtterAppContent(
                     onSearchPosts = viewModel::searchPosts,
                     onOpenCommunity = { name -> viewModel.selectFeed("r/$name") },
                     onToggleSubscription = viewModel::toggleCommunitySubscription,
-                    onOpenUser = viewModel::openUserPosts,
+                    onOpenUser = viewModel::openUserProfile,
                     onBack = { viewModel.navigateBack() },
                 )
 
-                AppScreen.About -> AboutScreen(onBack = { viewModel.navigateBack() })
+                AppScreen.About -> AboutScreen(
+                    onBack = { viewModel.navigateBack() },
+                    openLinksInApp = settings.openLinksInApp,
+                )
             }
         }
 
@@ -419,16 +472,29 @@ private fun OtterAppContent(
             communities = communities,
             connectionState = connectionState,
             accountState = accountState,
+            messagesSelected = screen == AppScreen.Messages,
+            unreadMessageCount = unreadMessageCount,
             onDismiss = { drawerVisible = false },
             onSelectFeed = viewModel::selectFeed,
             onOpenSearch = viewModel::openSearch,
             showRandomNsfw = settings.showRandomNsfwButton,
             onRandomNsfw = viewModel::openRandomNsfw,
             onAccountClick = {
-                if (accountState == RedditAccountState.SignedOut) {
+                when (val state = accountState) {
+                    is RedditAccountState.SignedIn -> viewModel.openUserProfile(state.account.username)
+                    RedditAccountState.SignedOut -> connectRedditAccount()
+                    RedditAccountState.Authorizing,
+                    RedditAccountState.Unavailable,
+                    -> viewModel.openSettings()
+                }
+            },
+            onOpenMessages = {
+                val account = (accountState as? RedditAccountState.SignedIn)?.account
+                if (account != null && "privatemessages" !in account.scopes) {
+                    viewModel.requestMessagesPermissionUpgrade()
                     connectRedditAccount()
                 } else {
-                    viewModel.openSettings()
+                    viewModel.openMessages()
                 }
             },
             onOpenSettings = viewModel::openSettings,
@@ -446,12 +512,23 @@ private fun OtterAppContent(
         )
     }
 
+    sidebarCommunityName?.let { communityName ->
+        CommunitySidebarSheet(
+            communityName = communityName,
+            sidebar = communitySidebar,
+            loading = communitySidebarLoading,
+            onDismiss = viewModel::dismissCommunitySidebar,
+        )
+    }
+
     // Above every sheet and bar: full-screen media owns the screen while it is open.
     mediaViewer?.let { request ->
         MediaViewerScreen(
             request = request,
             onClose = viewModel::closeMedia,
             hapticsEnabled = settings.haptics,
+            autoplay = settings.autoplayMedia,
+            mediaQuality = settings.mediaQuality,
             onSaveMedia = viewModel::saveMedia,
             onSaveDenied = { viewModel.notify("Currents needs storage access to save media") },
         )
@@ -495,6 +572,18 @@ private fun OtterAppContent(
             },
         )
     }
+
+
+    messageReplyTarget?.let { target ->
+        ReplyComposerSheet(
+            replyingTo = target.author,
+            onDismiss = { messageReplyTarget = null },
+            onSubmit = { body ->
+                viewModel.replyToMessage(target, body)
+                messageReplyTarget = null
+            },
+        )
+    }
 }
 
 @Composable
@@ -527,7 +616,7 @@ private fun PostPane(
             onPostVote = { viewModel.togglePostVote(post.id, it) },
             onSavePost = { viewModel.toggleSaved(post.id) },
             onOpenCommunity = { name -> viewModel.selectFeed("r/$name") },
-            onOpenUser = viewModel::openUserPosts,
+            onOpenUser = viewModel::openUserProfile,
             currentUsername = currentUsername,
             postIsHidden = postIsHidden,
             onHidePost = { viewModel.hidePost(post.id) },
@@ -538,7 +627,13 @@ private fun PostPane(
             onCommentVote = { commentId, vote -> viewModel.toggleCommentVote(post.id, commentId, vote) },
             onToggleCommentCollapsed = viewModel::toggleCommentCollapsed,
             onReply = { commentId ->
-                val author = comments.firstOrNull { it.id == commentId }?.author
+                // A null id means the post itself. Previously that path also discarded its
+                // author, so the composer could not say who the reply would notify.
+                val author = if (commentId == null) {
+                    post.author
+                } else {
+                    comments.firstOrNull { it.id == commentId }?.author
+                }
                 onReply(ReplyTarget(commentId, author))
             },
             onReportComment = viewModel::reportComment,
@@ -562,3 +657,15 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 
 internal fun isRightEdgeBackGesture(swipeEdge: Int): Boolean =
     swipeEdge == BackEventCompat.EDGE_RIGHT
+
+/**
+ * Master-detail needs enough horizontal room for both a readable feed and a comment pane.
+ * Requiring landscape avoids turning a large tablet's portrait layout into two narrow columns,
+ * while the 700dp floor catches foldables that fall just below Android's 840dp expanded class
+ * after system bars and hinge-safe insets are removed.
+ */
+internal fun shouldUseTwoPaneLayout(
+    widthDp: Float,
+    heightDp: Float,
+    smallestWidthDp: Int,
+): Boolean = smallestWidthDp >= 600 && widthDp >= 700f && widthDp > heightDp

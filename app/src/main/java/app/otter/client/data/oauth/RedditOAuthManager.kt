@@ -411,6 +411,7 @@ class RedditOAuthManager(
             "report",
             "subscribe",
             "account",
+            "privatemessages",
         )
         private const val TOKEN_EXPIRY_SKEW_MILLIS = 90_000L
         private const val HTTP_TOO_MANY_REQUESTS = 429

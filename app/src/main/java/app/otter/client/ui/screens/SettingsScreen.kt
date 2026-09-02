@@ -1,6 +1,5 @@
 package app.otter.client.ui.screens
 
-import android.content.Intent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -53,6 +52,7 @@ import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreHoriz
+import androidx.compose.material.icons.outlined.OpenInBrowser
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.outlined.Refresh
@@ -100,17 +100,20 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.net.toUri
 import app.otter.client.BuildConfig
 import app.otter.client.data.oauth.RedditApiConfiguration
 import app.otter.client.model.RedditAccountState
 import app.otter.client.ui.OtterSettings
+import app.otter.client.ui.CommentSort
 import app.otter.client.ui.FeedPresentation
 import app.otter.client.ui.FeedAction
+import app.otter.client.ui.FeedSort
+import app.otter.client.ui.MediaQuality
 import app.otter.client.ui.SwipeActionConfig
 import app.otter.client.ui.RedditConnectionState
 import app.otter.client.ui.ThemeMode
 import app.otter.client.ui.WEB_VIEW_SIGN_IN_RATIONALE
+import app.otter.client.ui.openWebLink
 import app.otter.client.ui.components.OtterMark
 import app.otter.client.ui.components.SwipeAction
 import app.otter.client.ui.theme.otterColors
@@ -124,7 +127,13 @@ fun SettingsScreen(
     onOpenAdvanced: () -> Unit,
     onThemeModeChange: (ThemeMode) -> Unit,
     onPresentationChange: (FeedPresentation) -> Unit,
+    onDefaultPostSortChange: (FeedSort) -> Unit,
+    onDefaultCommentSortChange: (CommentSort) -> Unit,
     onTextScaleChange: (Float) -> Unit,
+    onToggleAutoplayMedia: () -> Unit,
+    onTogglePrefetchMedia: () -> Unit,
+    onToggleShowThumbnails: () -> Unit,
+    onMediaQualityChange: (MediaQuality) -> Unit,
     onToggleThumbnailSide: () -> Unit,
     onToggleSwipeActions: () -> Unit,
     onToggleHaptics: () -> Unit,
@@ -140,6 +149,7 @@ fun SettingsScreen(
     onToggleHideRead: () -> Unit = {},
     onUpdateFilters: (Set<String>, Set<String>, Set<String>) -> Unit = { _, _, _ -> },
     onClearReadHistory: () -> Unit = {},
+    onToggleOpenLinksInApp: () -> Unit = {},
 ) {
     val colors = MaterialTheme.otterColors
     val density = LocalDensity.current
@@ -147,6 +157,7 @@ fun SettingsScreen(
     val navigationBarHeight = with(density) { WindowInsets.navigationBars.getBottom(this).toDp() }
     var showActionEditor by rememberSaveable { mutableStateOf(false) }
     var showFilterEditor by rememberSaveable { mutableStateOf(false) }
+    var showClearReadHistoryConfirmation by rememberSaveable { mutableStateOf(false) }
     LazyColumn(
         contentPadding = PaddingValues(top = statusBarHeight + 64.dp, bottom = navigationBarHeight + 32.dp),
         modifier = modifier
@@ -166,6 +177,7 @@ fun SettingsScreen(
                             ThemeMode.System -> "System"
                             ThemeMode.Light -> "Light"
                             ThemeMode.Dark -> "Dark"
+                            ThemeMode.Amoled -> "AMOLED"
                         }
                     },
                     onSelect = onThemeModeChange,
@@ -190,7 +202,7 @@ fun SettingsScreen(
                             Text(
                                 "${(settings.textScale * 100).toInt()}% · The quick brown fox",
                                 color = colors.textSecondary,
-                                fontSize = (13f * settings.textScale).sp,
+                                style = MaterialTheme.typography.bodySmall,
                             )
                         }
                     }
@@ -202,6 +214,29 @@ fun SettingsScreen(
                         modifier = Modifier.padding(horizontal = 4.dp),
                     )
                 }
+            }
+        }
+
+        item {
+            SettingsSectionLabel("DEFAULT SORTING")
+            SettingsGroup {
+                SettingsHeader(Icons.Outlined.SwapHoriz, "Posts")
+                SegmentPicker(
+                    choices = FeedSort.entries,
+                    selected = settings.defaultPostSort,
+                    label = FeedSort::label,
+                    onSelect = onDefaultPostSortChange,
+                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 13.dp),
+                )
+                SettingsDivider()
+                SettingsHeader(Icons.Outlined.SwapHoriz, "Comments")
+                SegmentPicker(
+                    choices = CommentSort.entries,
+                    selected = settings.defaultCommentSort,
+                    label = CommentSort::label,
+                    onSelect = onDefaultCommentSortChange,
+                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 13.dp),
+                )
             }
         }
 
@@ -259,7 +294,7 @@ fun SettingsScreen(
                     icon = Icons.Outlined.DoneAll,
                     title = "Clear read history",
                     subtitle = "Make locally read posts unread again",
-                    onClick = onClearReadHistory,
+                    onClick = { showClearReadHistoryConfirmation = true },
                 )
                 SettingsDivider()
                 SettingsLinkRow(
@@ -278,6 +313,57 @@ fun SettingsScreen(
                     subtitle = "Show gallery, video, and domain labels",
                     checked = settings.showPostFlairs,
                     onToggle = onToggleFlairs,
+                )
+            }
+        }
+
+        item {
+            SettingsSectionLabel("BROWSING")
+            SettingsGroup {
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.OpenInBrowser,
+                    title = "Open links in app",
+                    subtitle = "Private tabs with no browser history or shared cookies",
+                    checked = settings.openLinksInApp,
+                    onToggle = onToggleOpenLinksInApp,
+                )
+            }
+        }
+
+        item {
+            SettingsSectionLabel("DATA SAVER")
+            SettingsGroup {
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.CloudOff,
+                    title = "Autoplay media",
+                    subtitle = "Start videos and GIFs when opened or previewed",
+                    checked = settings.autoplayMedia,
+                    onToggle = onToggleAutoplayMedia,
+                )
+                SettingsDivider()
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.Refresh,
+                    title = "Prefetch media",
+                    subtitle = "Load upcoming media before it is opened",
+                    checked = settings.prefetchMedia,
+                    onToggle = onTogglePrefetchMedia,
+                )
+                SettingsDivider()
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.Image,
+                    title = "Feed thumbnails",
+                    subtitle = "Show image and video previews while browsing",
+                    checked = settings.showThumbnails,
+                    onToggle = onToggleShowThumbnails,
+                )
+                SettingsDivider()
+                SettingsHeader(Icons.Outlined.ViewAgenda, "Media quality")
+                SegmentPicker(
+                    choices = MediaQuality.entries,
+                    selected = settings.mediaQuality,
+                    label = MediaQuality::label,
+                    onSelect = onMediaQualityChange,
+                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 13.dp),
                 )
             }
         }
@@ -352,6 +438,30 @@ fun SettingsScreen(
             onSave = { keywords, communities, authors ->
                 onUpdateFilters(keywords, communities, authors)
                 showFilterEditor = false
+            },
+        )
+    }
+    if (showClearReadHistoryConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showClearReadHistoryConfirmation = false },
+            title = { Text("Clear read history?") },
+            text = {
+                Text("All posts marked as read on this device will become unread. This can’t be undone.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showClearReadHistoryConfirmation = false
+                        onClearReadHistory()
+                    },
+                ) {
+                    Text("Clear", color = colors.upvote)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearReadHistoryConfirmation = false }) {
+                    Text("Cancel")
+                }
             },
         )
     }
@@ -605,6 +715,7 @@ internal fun RedditApiConfigurationDialog(
 fun AboutScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    openLinksInApp: Boolean = true,
 ) {
     val colors = MaterialTheme.otterColors
     val context = LocalContext.current
@@ -652,8 +763,9 @@ fun AboutScreen(
             color = colors.surfaceRaised,
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier.clickable {
-                context.startActivity(
-                    Intent(Intent.ACTION_VIEW, "https://redditinc.com/policies/data-api-terms".toUri()),
+                context.openWebLink(
+                    "https://redditinc.com/policies/data-api-terms",
+                    inApp = openLinksInApp,
                 )
             },
         ) {

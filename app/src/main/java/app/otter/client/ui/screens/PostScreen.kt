@@ -93,11 +93,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import androidx.compose.ui.unit.sp
-import androidx.core.net.toUri
 import app.otter.client.model.Comment
 import app.otter.client.model.Post
 import app.otter.client.model.VoteState
 import app.otter.client.ui.OtterSettings
+import app.otter.client.ui.openWebLink
 import app.otter.client.ui.CommentSort
 import app.otter.client.ui.components.ActionBarItem
 import app.otter.client.ui.components.GlassActionBar
@@ -211,7 +211,7 @@ fun PostScreen(
 
     fun openDestination() {
         val link = post.destinationUrl ?: return
-        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, link.toUri())) }
+        context.openWebLink(link, inApp = settings.openLinksInApp)
     }
 
     val pullState = rememberPullToRefreshState()
@@ -245,7 +245,8 @@ fun PostScreen(
             item(key = "post-header") {
                 PostDetailHeader(
                     post = post,
-                    textScale = settings.textScale,
+                    autoplayMedia = settings.autoplayMedia,
+                    mediaQuality = settings.mediaQuality,
                     revealNsfw = settings.alwaysShowNsfw,
                     hapticsEnabled = settings.haptics,
                     onVote = onPostVote,
@@ -256,9 +257,7 @@ fun PostScreen(
                     onOpenMedia = { onOpenMedia(0) },
                     onOpenBodyMedia = onOpenCommentMedia,
                     onOpenLink = { link ->
-                        runCatching {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, link.toUri()))
-                        }
+                        context.openWebLink(link, inApp = settings.openLinksInApp)
                     },
                 )
             }
@@ -326,7 +325,6 @@ fun PostScreen(
                         MoreCommentsRow(
                             comment = comment,
                             loading = comment.id in expandingComments,
-                            textScale = settings.textScale,
                             onClick = { onLoadMoreComments(comment.id) },
                         )
                         return@itemsIndexed
@@ -336,12 +334,9 @@ fun PostScreen(
                         comment = comment,
                         onOpenCommentMedia = onOpenCommentMedia,
                         onOpenCommentLink = { link ->
-                            runCatching {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, link.toUri()))
-                            }
+                            context.openWebLink(link, inApp = settings.openLinksInApp)
                         },
                         hiddenReplies = hiddenReplies,
-                        textScale = settings.textScale,
                         swipeEnabled = settings.swipeActions,
                         hapticsEnabled = settings.haptics,
                         swipeActions = settings.commentSwipeActions,
@@ -407,7 +402,7 @@ fun PostScreen(
                 onReply = { onReply(null) },
                 onOpenLink = {
                     val link = post.destinationUrl ?: "https://reddit.com/comments/${post.id}"
-                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, link.toUri())) }
+                    context.openWebLink(link, inApp = settings.openLinksInApp)
                 },
                 hidden = postIsHidden,
                 isOwn = post.author.equals(currentUsername, ignoreCase = true),
@@ -487,7 +482,8 @@ fun PostScreen(
 @Composable
 private fun PostDetailHeader(
     post: Post,
-    textScale: Float,
+    autoplayMedia: Boolean,
+    mediaQuality: app.otter.client.ui.MediaQuality,
     revealNsfw: Boolean,
     hapticsEnabled: Boolean,
     onVote: (VoteState) -> Unit,
@@ -580,8 +576,7 @@ private fun PostDetailHeader(
         Text(
             text = post.title,
             color = colors.textPrimary,
-            fontSize = (20f * textScale).sp,
-            lineHeight = (25f * textScale).sp,
+            style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
         )
@@ -598,6 +593,8 @@ private fun PostDetailHeader(
                     warningLabel = warningLabel,
                     peekMedia = post.media,
                     hapticsEnabled = hapticsEnabled,
+                    autoplayPeek = autoplayMedia,
+                    mediaQuality = mediaQuality,
                     onReveal = { sensitiveMediaRevealed = true },
                     onOpenMedia = onOpenMedia.takeIf { post.media != null },
                     modifier = Modifier.fillMaxWidth().height(mediaHeight),
@@ -608,8 +605,6 @@ private fun PostDetailHeader(
         post.body?.takeIf { it.isNotBlank() }?.let { body ->
             RedditBody(
                 body = body,
-                fontSize = (15f * textScale).sp,
-                lineHeight = (22f * textScale).sp,
                 onOpenMedia = onOpenBodyMedia,
                 onOpenLink = onOpenLink,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -954,7 +949,6 @@ private const val HEADER_ITEM_COUNT = 2
 private fun MoreCommentsRow(
     comment: Comment,
     loading: Boolean,
-    textScale: Float,
     onClick: () -> Unit,
 ) {
     val colors = MaterialTheme.otterColors
@@ -990,7 +984,7 @@ private fun MoreCommentsRow(
                     if (comment.moreCount == 1) "reply" else "replies"
             },
             color = colors.accent,
-            fontSize = (14f * textScale).sp,
+            style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
         )
     }
@@ -1057,7 +1051,6 @@ private fun CommentRow(
     onOpenCommentMedia: (String) -> Unit,
     onOpenCommentLink: (String) -> Unit,
     hiddenReplies: Int,
-    textScale: Float,
     swipeEnabled: Boolean,
     hapticsEnabled: Boolean,
     swipeActions: app.otter.client.ui.SwipeActionConfig,
@@ -1146,7 +1139,7 @@ private fun CommentRow(
                         Text(
                             text = flair,
                             color = colors.textTertiary,
-                            fontSize = 10.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier
@@ -1160,7 +1153,7 @@ private fun CommentRow(
                         Text(
                             text = "OP",
                             color = colors.accent,
-                            fontSize = 9.sp,
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier
                                 .background(colors.accent.copy(alpha = .13f), RoundedCornerShape(4.dp))
@@ -1226,8 +1219,6 @@ private fun CommentRow(
             } else {
                 RedditBody(
                     body = comment.body,
-                    fontSize = (15f * textScale).sp,
-                    lineHeight = (21f * textScale).sp,
                     onOpenMedia = onOpenCommentMedia,
                     onOpenLink = onOpenCommentLink,
                     modifier = Modifier.padding(top = 6.dp),

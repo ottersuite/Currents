@@ -73,6 +73,7 @@ import app.otter.client.ui.components.media.ZoomableImage
 import app.otter.client.ui.components.media.rememberMediaPlayer
 import app.otter.client.ui.components.media.rememberMediaSaveRequest
 import app.otter.client.ui.components.media.useScrubbingMode
+import app.otter.client.ui.MediaQuality
 import app.otter.client.ui.theme.otterColors
 import kotlin.math.abs
 import kotlinx.coroutines.delay
@@ -115,6 +116,8 @@ fun MediaViewerScreen(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     hapticsEnabled: Boolean = true,
+    autoplay: Boolean = true,
+    mediaQuality: MediaQuality = MediaQuality.Auto,
     onSaveMedia: (MediaAsset) -> Unit = {},
     onSaveDenied: () -> Unit = {},
 ) {
@@ -166,6 +169,8 @@ fun MediaViewerScreen(
                 asset = request.assets[page],
                 // settledPage, not currentPage: playback waits until the swipe finishes.
                 active = pagerState.settledPage == page && abs(dragOffset) < 1f,
+                autoplay = autoplay,
+                mediaQuality = mediaQuality,
                 muted = muted,
                 chromeVisible = chromeVisible,
                 dismissEnabled = !zoomed,
@@ -287,6 +292,8 @@ private fun ViewerTopBar(title: String, position: Int, count: Int, onClose: () -
 private fun MediaPage(
     asset: MediaAsset,
     active: Boolean,
+    autoplay: Boolean,
+    mediaQuality: MediaQuality,
     muted: Boolean,
     chromeVisible: Boolean,
     dismissEnabled: Boolean,
@@ -329,6 +336,8 @@ private fun MediaPage(
         else -> PlayablePage(
             asset = asset,
             active = active,
+            autoplay = autoplay,
+            mediaQuality = mediaQuality,
             muted = muted,
             chromeVisible = chromeVisible,
             scrubbable = scrubbable,
@@ -345,6 +354,8 @@ private fun MediaPage(
 private fun PlayablePage(
     asset: MediaAsset,
     active: Boolean,
+    autoplay: Boolean,
+    mediaQuality: MediaQuality,
     muted: Boolean,
     chromeVisible: Boolean,
     scrubbable: Boolean,
@@ -357,10 +368,12 @@ private fun PlayablePage(
     val currentTap by rememberUpdatedState(onTap)
     val currentHold by rememberUpdatedState(onHold)
     var playbackFailed by remember(asset) { mutableStateOf(false) }
+    var playRequested by remember(asset) { mutableStateOf(autoplay) }
     val player = rememberMediaPlayer(
         asset = asset,
-        play = active,
+        play = active && playRequested,
         muted = muted,
+        mediaQuality = mediaQuality,
         onExhausted = { playbackFailed = true },
     )
 
@@ -523,12 +536,23 @@ private fun PlayablePage(
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             VideoControls(
-                player = player,
                 playing = playing,
                 positionMs = positionMs,
                 durationMs = durationMs,
                 muted = muted,
                 onMutedChange = onMutedChange,
+                onPlayToggle = {
+                    if (playing) {
+                        playRequested = false
+                        player.pause()
+                    } else {
+                        // Media3 does not rewind when play() is called from STATE_ENDED.
+                        // Seeking first also makes a completed clip scrubbable and replayable.
+                        if (player.playbackState == Player.STATE_ENDED) player.seekTo(0L)
+                        playRequested = true
+                        player.play()
+                    }
+                },
             )
         }
     }
@@ -573,12 +597,12 @@ private fun GifBadge(modifier: Modifier = Modifier) {
 
 @Composable
 private fun VideoControls(
-    player: Player,
     playing: Boolean,
     positionMs: Long,
     durationMs: Long,
     muted: Boolean,
     onMutedChange: (Boolean) -> Unit,
+    onPlayToggle: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -589,7 +613,7 @@ private fun VideoControls(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        IconButton(onClick = { if (player.isPlaying) player.pause() else player.play() }) {
+        IconButton(onClick = onPlayToggle) {
             Icon(
                 imageVector = if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
                 contentDescription = if (playing) "Pause" else "Play",

@@ -2,17 +2,22 @@ package app.otter.client.data
 
 import app.otter.client.model.Comment
 import app.otter.client.model.Community
+import app.otter.client.model.CommunitySidebar
 import app.otter.client.model.Post
 import app.otter.client.model.RedditAccount
 import app.otter.client.model.RedditAccountState
+import app.otter.client.model.RedditMessage
 import app.otter.client.model.SubmissionKind
 import app.otter.client.model.VoteState
+import app.otter.client.model.UserProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 private val unavailableAccountState =
     MutableStateFlow<RedditAccountState>(RedditAccountState.Unavailable).asStateFlow()
+private val emptyMessagesState =
+    MutableStateFlow<List<RedditMessage>>(emptyList()).asStateFlow()
 
 /**
  * Data boundary consumed by screen-level view models.
@@ -25,6 +30,8 @@ interface RedditRepository {
     val communities: StateFlow<List<Community>>
     val accountState: StateFlow<RedditAccountState>
         get() = unavailableAccountState
+    val messages: StateFlow<List<RedditMessage>>
+        get() = emptyMessagesState
     val isLive: Boolean
         get() = false
 
@@ -120,6 +127,14 @@ interface RedditRepository {
                 .take(limit),
         )
 
+    /** Loads account metadata and recent submissions without replacing the active feed. */
+    suspend fun userProfile(username: String): Result<UserProfile> =
+        Result.failure(IllegalStateException("Reddit profiles are unavailable"))
+
+    /** Loads the public description and rules traditionally shown in a subreddit sidebar. */
+    suspend fun communitySidebar(communityName: String): Result<CommunitySidebar> =
+        Result.failure(IllegalStateException("Community sidebar is unavailable"))
+
     fun beginAccountAuthorization(): Result<String> =
         Result.failure(IllegalStateException("Add a Reddit client ID to connect an account"))
 
@@ -129,6 +144,18 @@ interface RedditRepository {
         Result.failure(IllegalStateException("Reddit account connection is unavailable"))
 
     suspend fun disconnectAccount(): Result<Unit> = Result.success(Unit)
+
+    /** Loads the signed-in account's inbox, newest first. */
+    suspend fun refreshMessages(): Result<Unit> =
+        Result.failure(IllegalStateException("Reddit messages are unavailable"))
+
+    /** Replies to an inbox item by its Reddit fullname (normally a t1 or t4 id). */
+    suspend fun replyToMessage(fullname: String, body: String): Result<Unit> =
+        Result.failure(IllegalStateException("Reddit messages are unavailable"))
+
+    /** Marks inbox items as read on Reddit and updates the local snapshot. */
+    suspend fun markMessagesRead(fullnames: Collection<String>): Result<Unit> =
+        Result.failure(IllegalStateException("Reddit messages are unavailable"))
 
     /**
      * Obtains an access token before anything needs one.

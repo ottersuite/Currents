@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import okhttp3.FormBody
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -17,11 +18,106 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
 class RedditApiRepositorySessionTest {
+    @Test
+    fun inboxLoadsRepliesAndPrivateMessagesWithUnreadState() = runBlocking {
+        val requestedUrls = mutableListOf<String>()
+        val repository = signedInRepository(
+            OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    requestedUrls += chain.request().url.toString()
+                    jsonResponse(
+                        chain.request(),
+                        """
+                            {
+                              "data": {
+                                "children": [
+                                  {
+                                    "kind": "t4",
+                                    "data": {
+                                      "id": "private-1",
+                                      "name": "t4_private1",
+                                      "author": "orca-friend",
+                                      "subject": "Hello from Reddit",
+                                      "body": "Want to compare reader setups?",
+                                      "created_utc": 1700000000,
+                                      "new": true,
+                                      "was_comment": false
+                                    }
+                                  },
+                                  {
+                                    "kind": "t1",
+                                    "data": {
+                                      "id": "reply-1",
+                                      "name": "t1_reply1",
+                                      "author": "helpful-user",
+                                      "subject": "comment reply",
+                                      "body": "This worked for me too.",
+                                      "created_utc": 1699999900,
+                                      "new": false,
+                                      "was_comment": true,
+                                      "context": "/r/android/comments/post/thread/reply1"
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                        """.trimIndent(),
+                    )
+                }
+                .build(),
+        )
+
+        assertTrue(repository.refreshMessages().isSuccess)
+
+        assertEquals(2, repository.messages.value.size)
+        val privateMessage = repository.messages.value.first()
+        assertEquals("t4_private1", privateMessage.fullname)
+        assertEquals("orca-friend", privateMessage.author)
+        assertTrue(privateMessage.isUnread)
+        assertFalse(privateMessage.isCommentReply)
+        assertTrue(requestedUrls.single().contains("mark=false"))
+    }
+
+    @Test
+    fun inboxItemsCanBeRepliedToAndMarkedRead() = runBlocking {
+        val postedForms = mutableMapOf<String, FormBody>()
+        val repository = signedInRepository(
+            OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    val request = chain.request()
+                    val path = request.url.encodedPath
+                    (request.body as? FormBody)?.let { postedForms[path] = it }
+                    val payload = if (path == "/message/inbox") {
+                        """{"data":{"children":[{"kind":"t4","data":{"id":"one","name":"t4_one","author":"friend","subject":"Hi","body":"Hello","created_utc":1,"new":true}}]}}"""
+                    } else {
+                        "{}"
+                    }
+                    jsonResponse(request, payload)
+                }
+                .build(),
+        )
+        assertTrue(repository.refreshMessages().isSuccess)
+
+        assertTrue(repository.replyToMessage("t4_one", "A useful reply").isSuccess)
+        assertTrue(repository.markMessagesRead(listOf("t4_one")).isSuccess)
+
+        val reply = checkNotNull(postedForms["/api/comment"])
+        assertEquals("t4_one", reply.formValue("thing_id"))
+        assertEquals("A useful reply", reply.formValue("text"))
+        val read = checkNotNull(postedForms["/api/read_message"])
+        assertEquals("t4_one", read.formValue("id"))
+        assertFalse(repository.messages.value.single().isUnread)
+    }
+
+    private fun FormBody.formValue(name: String): String =
+        value((0 until size).first { index -> this.name(index) == name })
+
     @Test
     fun inFlightRefreshCannotRepopulateFeedAfterDisconnect() = runBlocking {
         val blockedApi = BlockingApi(
@@ -318,7 +414,7 @@ class RedditApiRepositorySessionTest {
                     refreshToken = "refresh-token",
                     accountId = "account-id",
                     username = "otter-user",
-                    scopes = setOf("identity", "read", "mysubreddits"),
+                    scopes = setOf("identity", "read", "mysubreddits", "privatemessages"),
                 ),
             ),
         )

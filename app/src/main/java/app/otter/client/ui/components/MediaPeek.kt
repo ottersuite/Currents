@@ -29,6 +29,7 @@ import androidx.compose.ui.window.PopupProperties
 import app.otter.client.model.MediaKind
 import app.otter.client.model.PostMedia
 import app.otter.client.model.PostPreview
+import app.otter.client.ui.MediaQuality
 import app.otter.client.ui.components.media.MediaSurface
 import app.otter.client.ui.components.media.rememberMediaPlayer
 import coil3.compose.AsyncImage
@@ -45,7 +46,12 @@ import coil3.compose.AsyncImage
  * underneath, which is still tracking the same unbroken press.
  */
 @Composable
-fun MediaPeek(preview: PostPreview, media: PostMedia?) {
+fun MediaPeek(
+    preview: PostPreview,
+    media: PostMedia?,
+    autoplay: Boolean,
+    mediaQuality: MediaQuality,
+) {
     Popup(
         alignment = Alignment.Center,
         properties = PopupProperties(
@@ -79,7 +85,12 @@ fun MediaPeek(preview: PostPreview, media: PostMedia?) {
                     .clip(RoundedCornerShape(14.dp)),
                 contentAlignment = Alignment.Center,
             ) {
-                PeekContent(preview = preview, media = media)
+                PeekContent(
+                    preview = preview,
+                    media = media,
+                    autoplay = autoplay,
+                    mediaQuality = mediaQuality,
+                )
             }
 
             media?.takeIf { it.isGallery }?.let { gallery ->
@@ -102,10 +113,20 @@ fun MediaPeek(preview: PostPreview, media: PostMedia?) {
  * Muted throughout — a peek is a glance, and it should not interrupt whatever is already playing.
  */
 @Composable
-private fun PeekContent(preview: PostPreview, media: PostMedia?) {
+private fun PeekContent(
+    preview: PostPreview,
+    media: PostMedia?,
+    autoplay: Boolean,
+    mediaQuality: MediaQuality,
+) {
     val asset = media?.first
-    if (asset != null && asset.needsPlayer) {
-        val player = rememberMediaPlayer(asset = asset, play = true, muted = true)
+    if (autoplay && asset != null && asset.needsPlayer) {
+        val player = rememberMediaPlayer(
+            asset = asset,
+            play = true,
+            muted = true,
+            mediaQuality = mediaQuality,
+        )
         MediaSurface(
             player = player,
             previewUrl = asset.previewUrl ?: preview.cardImageUrl ?: preview.imageUrl,
@@ -118,7 +139,7 @@ private fun PeekContent(preview: PostPreview, media: PostMedia?) {
 
     // An animated image with no player-friendly encoding still moves; Coil's GIF decoder drives
     // it from the same surface a still would use.
-    val url = asset?.takeIf { it.kind == MediaKind.ANIMATED }?.animatedImageUrl
+    val url = asset?.takeIf { autoplay && it.kind == MediaKind.ANIMATED }?.animatedImageUrl
         ?: preview.imageUrl
         ?: preview.cardImageUrl
         ?: preview.thumbnailUrl

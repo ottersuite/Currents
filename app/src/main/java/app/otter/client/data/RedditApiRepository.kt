@@ -7,6 +7,8 @@ import app.otter.client.data.oauth.RedditOAuthManager
 import app.otter.client.BuildConfig
 import app.otter.client.model.Comment
 import app.otter.client.model.Community
+import app.otter.client.model.CommunityRule
+import app.otter.client.model.CommunitySidebar
 import app.otter.client.model.Post
 import app.otter.client.model.PostPreview
 import app.otter.client.model.PostType
@@ -14,7 +16,9 @@ import app.otter.client.model.SubmissionKind
 import app.otter.client.model.RedditAccount
 import app.otter.client.model.RedditAccountState
 import app.otter.client.model.RedditAuthenticationException
+import app.otter.client.model.RedditMessage
 import app.otter.client.model.VoteState
+import app.otter.client.model.UserProfile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -22,6 +26,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -54,6 +61,8 @@ class RedditApiRepository(
 
     override val isLive: Boolean = true
     override val accountState = oauthManager.accountState
+    private val mutableMessages = MutableStateFlow<List<RedditMessage>>(emptyList())
+    override val messages: StateFlow<List<RedditMessage>> = mutableMessages.asStateFlow()
 
     /** Keeps optimistic account mutations stable across subsequent listing responses. */
     private val localStateLock = Any()
@@ -91,6 +100,7 @@ class RedditApiRepository(
     override suspend fun disconnectAccount(): Result<Unit> {
         synchronized(localStateLock) {
             invalidateContentSessionLocked()
+            mutableMessages.value = emptyList()
         }
         val result = try {
             oauthManager.disconnect()
@@ -104,6 +114,67 @@ class RedditApiRepository(
         }
         return result
     }
+
+    override suspend fun refreshMessages(): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            requireMessageScope()
+            val requestSessionGeneration = synchronized(localStateLock) { contentSessionGeneration }
+            val token = oauthManager.accessToken()
+            val root = JSONObject(
+                authorizedGet(
+                    "https://oauth.reddit.com/message/inbox?limit=100&raw_json=1&mark=false",
+                    token,
+                ),
+            )
+            val loaded = parseMessages(root)
+            synchronized(localStateLock) {
+                if (requestSessionGeneration == contentSessionGeneration) {
+                    mutableMessages.value = loaded
+                }
+            }
+        }
+    }
+
+    override suspend fun replyToMessage(fullname: String, body: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                requireMessageScope()
+                require(fullname.matches(Regex("t[14]_[A-Za-z0-9]+"))) {
+                    "This message cannot be replied to"
+                }
+                require(body.isNotBlank()) { "Reply cannot be blank" }
+                authorizedPost(
+                    path = "/api/comment",
+                    body = FormBody.Builder()
+                        .add("api_type", "json")
+                        .add("thing_id", fullname)
+                        .add("text", body.trim())
+                        .add("raw_json", "1")
+                        .build(),
+                    retryOnUnauthorized = false,
+                )
+                Unit
+            }
+        }
+
+    override suspend fun markMessagesRead(fullnames: Collection<String>): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                requireMessageScope()
+                val wanted = fullnames.filter { it.matches(Regex("t[14]_[A-Za-z0-9]+")) }.toSet()
+                if (wanted.isEmpty()) return@runCatching
+                authorizedPost(
+                    path = "/api/read_message",
+                    body = FormBody.Builder().add("id", wanted.joinToString(",")).build(),
+                    retryOnUnauthorized = true,
+                )
+                synchronized(localStateLock) {
+                    mutableMessages.value = mutableMessages.value.map { message ->
+                        if (message.fullname in wanted) message.copy(isUnread = false) else message
+                    }
+                }
+            }
+        }
 
     override fun submitPost(
         communityName: String,
@@ -835,6 +906,86 @@ class RedditApiRepository(
             }
         }
 
+    override suspend fun userProfile(username: String): Result<UserProfile> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val normalized = username.trim().removePrefix("u/").removePrefix("/u/")
+                require(normalized.isNotBlank()) { "Username cannot be blank" }
+                val token = oauthManager.accessToken()
+                val encoded = normalized.urlEncoded()
+                val about = JSONObject(
+                    authorizedGet(
+                        "https://oauth.reddit.com/user/$encoded/about?raw_json=1",
+                        token,
+                    ),
+                ).optJSONObject("data") ?: throw IOException("Reddit profile was empty")
+                val submitted = JSONObject(
+                    authorizedGet(
+                        "https://oauth.reddit.com/user/$encoded/submitted" +
+                            "?sort=new&limit=25&raw_json=1",
+                        token,
+                    ),
+                )
+                val profileSubreddit = about.optJSONObject("subreddit")
+                UserProfile(
+                    username = about.nullableString("name") ?: normalized,
+                    displayName = profileSubreddit?.nullableString("title") ?: normalized,
+                    description = profileSubreddit?.nullableString("public_description").orEmpty(),
+                    iconUrl = about.nullableString("icon_img")?.decodeRedditUrl()?.substringBefore('?'),
+                    createdAtEpochSeconds = about.optLong("created_utc").coerceAtLeast(0L),
+                    totalKarma = about.optLong("total_karma").coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
+                    postKarma = about.optLong("link_karma").coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
+                    commentKarma = about.optLong("comment_karma").coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
+                    isGold = about.optBoolean("is_gold"),
+                    isEmployee = about.optBoolean("is_employee"),
+                    recentPosts = parsePosts(submitted),
+                )
+            }
+        }
+
+    override suspend fun communitySidebar(communityName: String): Result<CommunitySidebar> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val normalized = communityName.trim().removePrefix("r/")
+                require(normalized.isNotBlank()) { "Community name cannot be blank" }
+                val token = oauthManager.accessToken()
+                val encoded = normalized.urlEncoded()
+                val about = JSONObject(
+                    authorizedGet(
+                        "https://oauth.reddit.com/r/$encoded/about?raw_json=1",
+                        token,
+                    ),
+                ).optJSONObject("data") ?: throw IOException("Community sidebar was empty")
+                val rulesPayload = JSONObject(
+                    authorizedGet(
+                        "https://oauth.reddit.com/r/$encoded/about/rules?raw_json=1",
+                        token,
+                    ),
+                )
+                val rulesJson = rulesPayload.optJSONArray("rules")
+                val rules = buildList {
+                    if (rulesJson != null) {
+                        for (index in 0 until rulesJson.length()) {
+                            val rule = rulesJson.optJSONObject(index) ?: continue
+                            val title = rule.nullableString("short_name") ?: continue
+                            add(CommunityRule(title, rule.nullableString("description").orEmpty()))
+                        }
+                    }
+                }
+                CommunitySidebar(
+                    communityName = about.nullableString("display_name") ?: normalized,
+                    title = about.nullableString("title") ?: normalized,
+                    description = about.nullableString("public_description")
+                        ?: about.nullableString("description").orEmpty(),
+                    memberCount = about.optLong("subscribers")
+                        .coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
+                    activeUserCount = about.optLong("accounts_active")
+                        .coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
+                    rules = rules,
+                )
+            }
+        }
+
     private fun parseCommunitySuggestions(payload: JSONObject, limit: Int): List<Community> {
         val children = payload.optJSONObject("data")?.optJSONArray("children") ?: return emptyList()
         return (0 until children.length())
@@ -944,6 +1095,16 @@ class RedditApiRepository(
         return System.currentTimeMillis() - subscriptionsLoadedAtMillis > SUBSCRIPTION_TTL_MS
     }
 
+    private fun requireMessageScope() {
+        val account = (accountState.value as? RedditAccountState.SignedIn)?.account
+            ?: throw RedditAuthenticationException("Connect your Reddit account first")
+        if ("privatemessages" !in account.scopes) {
+            throw RedditAuthenticationException(
+                "Reconnect your Reddit account to enable messages",
+            )
+        }
+    }
+
     /**
      * The full listing URL for a feed name.
      *
@@ -1010,6 +1171,31 @@ class RedditApiRepository(
             for (index in 0 until children.length()) {
                 val data = children.optJSONObject(index)?.optJSONObject("data") ?: continue
                 parsePost(data)?.let(::add)
+            }
+        }
+    }
+
+    private fun parseMessages(root: JSONObject): List<RedditMessage> {
+        val children = root.optJSONObject("data")?.optJSONArray("children") ?: return emptyList()
+        return buildList {
+            for (index in 0 until children.length()) {
+                val data = children.optJSONObject(index)?.optJSONObject("data") ?: continue
+                val id = data.nullableString("id") ?: continue
+                val fullname = data.nullableString("name") ?: continue
+                val body = data.nullableString("body") ?: continue
+                add(
+                    RedditMessage(
+                        id = id,
+                        fullname = fullname,
+                        author = data.nullableString("author") ?: "reddit",
+                        subject = data.nullableString("subject") ?: "Message",
+                        body = body,
+                        createdAtEpochSeconds = data.optDouble("created_utc", 0.0).toLong(),
+                        isUnread = data.optBoolean("new"),
+                        isCommentReply = data.optBoolean("was_comment"),
+                        context = data.nullableString("context"),
+                    ),
+                )
             }
         }
     }

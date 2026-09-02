@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.Casino
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.MailOutline
 import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Search
@@ -93,12 +94,15 @@ fun OtterSideMenu(
     communities: List<Community>,
     connectionState: RedditConnectionState,
     accountState: RedditAccountState,
+    messagesSelected: Boolean,
+    unreadMessageCount: Int,
     onDismiss: () -> Unit,
     onSelectFeed: (String) -> Unit,
     onOpenSearch: () -> Unit,
     showRandomNsfw: Boolean,
     onRandomNsfw: () -> Unit,
     onAccountClick: () -> Unit,
+    onOpenMessages: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenAbout: () -> Unit,
     modifier: Modifier = Modifier,
@@ -195,14 +199,16 @@ fun OtterSideMenu(
                         .padding(start = 20.dp, end = 16.dp, top = 18.dp, bottom = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    OtterMark(modifier = Modifier.size(46.dp))
-                    Spacer(Modifier.width(12.dp))
+                    OtterMark(modifier = Modifier.size(36.dp))
+                    Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
                             text = "Currents",
                             color = colors.textPrimary,
-                            fontSize = 20.sp,
+                            style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                         Text(
                             text = when (accountState) {
@@ -219,8 +225,11 @@ fun OtterSideMenu(
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = colors.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
+                    Spacer(Modifier.width(8.dp))
                     Box(
                         modifier = Modifier
                             .clip(CircleShape)
@@ -229,12 +238,13 @@ fun OtterSideMenu(
                                 onAccountClick()
                                 onDismiss()
                             }
-                            .padding(10.dp),
+                            .padding(8.dp),
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.PersonOutline,
                             contentDescription = "Account",
                             tint = colors.textSecondary,
+                            modifier = Modifier.size(20.dp),
                         )
                     }
                 }
@@ -266,6 +276,17 @@ fun OtterSideMenu(
                             },
                         )
                     }
+                    DrawerRow(
+                        title = "Messages",
+                        subtitle = "Replies and private messages",
+                        icon = Icons.Outlined.MailOutline,
+                        selected = messagesSelected,
+                        badgeCount = unreadMessageCount,
+                        onClick = {
+                            onOpenMessages()
+                            onDismiss()
+                        },
+                    )
 
                     Spacer(Modifier.height(12.dp))
                     DrawerSectionLabel("SUBREDDITS")
@@ -420,7 +441,7 @@ private fun CommunityRow(
                 Text(
                     text = community.name.take(1).uppercase(),
                     color = Color.White,
-                    fontSize = 13.sp,
+                    style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                 )
             }
@@ -429,7 +450,7 @@ private fun CommunityRow(
         Text(
             text = community.name,
             color = if (selected) colors.accent else colors.textPrimary,
-            fontSize = COMMUNITY_ROW_FONT_SIZE,
+            style = MaterialTheme.typography.bodyMedium,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -449,7 +470,6 @@ private const val DRAWER_WIDTH_FRACTION = .65f
 /** Sized for a list that repeats, rather than for a row that appears once. */
 private val COMMUNITY_ICON_SIZE = 26.dp
 private val COMMUNITY_ROW_PADDING = 5.dp
-private val COMMUNITY_ROW_FONT_SIZE = 14.sp
 
 @Composable
 private fun DrawerSectionLabel(text: String) {
@@ -470,6 +490,7 @@ private fun DrawerRow(
     selected: Boolean,
     onClick: () -> Unit,
     subtitle: String? = null,
+    badgeCount: Int = 0,
 ) {
     val colors = MaterialTheme.otterColors
     Row(
@@ -497,7 +518,7 @@ private fun DrawerRow(
             )
         }
         Spacer(Modifier.width(11.dp))
-        Column {
+        Column(Modifier.weight(1f)) {
             Text(
                 text = title,
                 color = if (selected) colors.accent else colors.textPrimary,
@@ -509,6 +530,21 @@ private fun DrawerRow(
                     text = subtitle,
                     color = colors.textTertiary,
                     style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+        if (badgeCount > 0) {
+            Spacer(Modifier.width(8.dp))
+            Surface(
+                color = colors.accent,
+                contentColor = Color.White,
+                shape = CircleShape,
+            ) {
+                Text(
+                    text = if (badgeCount > 99) "99+" else badgeCount.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
                 )
             }
         }
