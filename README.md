@@ -52,7 +52,7 @@ Installing a newer GitHub release over an existing Currents installation preserv
 ### Verify the download
 
 - Package ID: `app.orca.client`
-- Currents 1.0.1 APK SHA-256: `30E4E2AAE093876EEC2A611729124495C1678CACC3398D4A2DECD8A64039B394`
+- Currents 1.0.2 APK SHA-256: `0D03C5A1EFB567A1A7FD7329BDAB6D51FB0D86793252973C30BE63C585126470`
 
 On Windows, verify the file with:
 
